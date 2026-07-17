@@ -252,7 +252,40 @@ async function loadSignals() {
         <td><span class="sig-badge-inline status-${s.status || 'open'}">${statusFa[s.status || 'open'] || s.status}</span></td>
         <td>${[...new Set(s.hits.map(h => h.name))].join(', ')}</td>
       </tr>`).join('');
+    // Load signal win rates
+    loadSignalWinRates();
   } catch (e) { console.error(e); }
+}
+
+/* Signal Win Rates */
+async function loadSignalWinRates() {
+  try {
+    const { win_rates } = await json('/api/trades/win-rates');
+    if (!win_rates) return;
+    const periods = { '5m': 'hourly', '30m': 'hourly', '1h': 'hourly', '4h': '4hour', '24h': 'daily' };
+    const el5 = document.getElementById('sig_wr_5m');
+    const el30 = document.getElementById('sig_wr_30m');
+    const el1h = document.getElementById('sig_wr_1h');
+    const el4h = document.getElementById('sig_wr_4h');
+    const el24h = document.getElementById('sig_wr_24h');
+    
+    const hr = win_rates.hourly || {};
+    const h4 = win_rates['4hour'] || {};
+    const dy = win_rates.daily || {};
+    const all = win_rates.all || {};
+    
+    const fmt = (d) => d && d.win_rate !== undefined ? d.win_rate + '%' : '—';
+    const color = (d) => {
+      if (!d || d.win_rate === undefined) return '';
+      return d.win_rate >= 60 ? 'color:var(--success)' : d.win_rate >= 40 ? 'color:var(--accent)' : 'color:var(--danger)';
+    };
+    
+    if (el5) { el5.textContent = fmt(hr); el5.style = color(hr); }
+    if (el30) { el30.textContent = fmt(hr); el30.style = color(hr); }
+    if (el1h) { el1h.textContent = fmt(hr); el1h.style = color(hr); }
+    if (el4h) { el4h.textContent = fmt(h4); el4h.style = color(h4); }
+    if (el24h) { el24h.textContent = fmt(dy); el24h.style = color(dy); }
+  } catch(e) { console.debug('Signal WR:', e); }
 }
 
 /* Position filter */

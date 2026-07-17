@@ -582,6 +582,9 @@ SCALP_STRATEGY_REGISTRY = {
     "scalp_order_flow": ScalpOrderFlowImbalance,
     "scalp_squeeze_release": ScalpSqueezeRelease,
     "scalp_engulfing": ScalpEngulfing,
+    "scalp_micromap": ScalpMicroMap,
+    "scalp_pro_btb": ScalpProBTB,
+    "scalp_sp2l": ScalpSP2L,
 }
 
 
@@ -594,3 +597,369 @@ def build_scalp_strategies(strategy_params: Dict[str, Dict[str, Any]]) -> list:
         if instance.enabled:
             out.append(instance)
     return out
+
+
+
+# ==========================================================
+# 11) MicroMap — Institutional Breakout Zone + Pullback Retest
+# ==========================================================
+class ScalpMicroMap(BaseScalpStrategy):
+    """MicroMap Strategy: Institutional breakout zone detection + pullback entry.
+    
+    Logic:
+    1. Detect breakout zone: price displaces beyond a consolidation range
+       (ATR-based minimum gap, large body candle = displacement)
+    2. Wait for pullback: price retraces back to the breakout zone
+    3. Confirm entry: inside bar OR rejection candle at zone
+    4. Entry in direction of breakout, SL behind zone
+    
+    Based on: Institutional Breakout Scalper concept
+    Timeframe: 5m-15m
+    """
+    name = "scalp_micromap"
+    default_weight = 1.3
+
+    def evaluate(self, df: pd.DataFrame, ctx: Dict[str, Any]) -> Optional[StrategyHit]:
+        if not self.enabled or len(df) < 30:
+            return None
+
+        close = df["close"].astype(float)
+        open_ = df["open"].astype(float)
+        high = df["high"].astype(float)
+        low = df["low"].astype(float)
+        volume = df["volume"].astype(float)
+
+        # Parameters
+        lookback = int(self.params.get("lookback", 20))
+        min_displacement_atr = float(self.params.get("min_displacement_atr", 1.5))
+        pullback_tolerance = float(self.params.get("pullback_tolerance_pct", 0.3))
+
+        # ATR
+        atr_val = float(ind.atr(high, low, close, 14).iloc[-1])
+        if atr_val <= 0:
+            return None
+
+        # Step 1: Find recent displacement (breakout) candle in lookback
+        displacement_idx = -1
+        displacement_dir = ""
+        for i in range(-lookback, -1):
+            body = abs(float(close.iloc[i]) - float(open_.iloc[i]))
+            body_atr = body / atr_val
+            body_range = body / max(float(high.iloc[i]) - float(low.iloc[i]), 1e-10)
+            if body_atr >= min_displacement_atr and body_range >= 0.6:
+                displacement_idx = len(close) + i
+                displacement_dir = "bullish" if close.iloc[i] > open_.iloc[i] else "bearish"
+                break
+
+        if displacement_idx < 0:
+            return None
+
+        # Step 2: Define breakout zone
+        if displacement_dir == "bullish":
+            zone_top = float(open_.iloc[displacement_idx - len(close)])  # Top of zone = open of displacement
+            zone_bottom = zone_top - atr_val * 0.5
+        else:
+            zone_bottom = float(open_.iloc[displacement_idx - len(close)])
+            zone_top = zone_bottom + atr_val * 0.5
+
+        # Step 3: Check if current price is in pullback to zone
+        current = float(close.iloc[-1])
+        zone_mid = (zone_top + zone_bottom) / 2
+        in_zone = zone_bottom * (1 - pullback_tolerance/100) <= current <= zone_top * (1 + pullback_tolerance/100)
+
+        if not in_zone:
+            return None
+
+        # Step 4: Confirmation — rejection wick or inside bar
+        last = df.iloc[-1]
+        prev = df.iloc[-2]
+        confirmed = False
+
+        if displacement_dir == "bullish":
+            # Bullish: need rejection from zone (close above zone with lower wick into it)
+            if last.close > zone_top and last.low <= zone_top:
+                confirmed = True
+            # Or inside bar contained in previous bar
+            elif last.high <= prev.high and last.low >= prev.low and last.close > last.open:
+                confirmed = True
+        else:
+            if last.close < zone_bottom and last.high >= zone_bottom:
+                confirmed = True
+            elif last.high <= prev.high and last.low >= prev.low and last.close < last.open:
+                confirmed = True
+
+        if not confirmed:
+            return None
+
+        side = "long" if displacement_dir == "bullish" else "short"
+        vol_avg = volume.rolling(20).mean().iloc[-1]
+        vol_ratio = float(volume.iloc[-1] / vol_avg) if vol_avg > 0 else 1.0
+
+        score = float(np.clip(0.60 + 0.15 * min(vol_ratio / 2, 1) + 0.10, 0, 1))
+
+        return StrategyHit(self.name, ctx.get("timeframe", "?"),
+                           score=round(score, 4), weight=self.weight,
+                           detail={"side": side, "zone_top": round(zone_top, 6),
+                                   "zone_bottom": round(zone_bottom, 6),
+                                   "displacement_atr": round(min_displacement_atr, 2),
+                                   "vol_ratio": round(vol_ratio, 2),
+                                   "setup": "micromap"})
+
+
+# ==========================================================
+# 12) PRO BTB — Back To Breakeven (Breakout + Retest)
+# ==========================================================
+class ScalpProBTB(BaseScalpStrategy):
+    """PRO BTB Strategy: Enter after price breaks key level then retests it.
+    
+    Logic:
+    1. Identify key level (recent swing high/low or consolidation boundary)
+    2. Price breaks through level with a spike (displacement candle)
+    3. Price returns to the broken level (back to breakeven)
+    4. Enter in breakout direction at the retest
+    5. SL behind breakout candle, TP at 2:1+ RR
+    
+    Based on: Mohammad Ali Poursamadi's Pro BTB methodology
+    Timeframe: 5m-15m
+    """
+    name = "scalp_pro_btb"
+    default_weight = 1.4
+
+    def evaluate(self, df: pd.DataFrame, ctx: Dict[str, Any]) -> Optional[StrategyHit]:
+        if not self.enabled or len(df) < 25:
+            return None
+
+        close = df["close"].astype(float)
+        open_ = df["open"].astype(float)
+        high = df["high"].astype(float)
+        low = df["low"].astype(float)
+        volume = df["volume"].astype(float)
+
+        min_spike_bars = int(self.params.get("min_spike_bars", 2))
+        retest_tolerance_pct = float(self.params.get("retest_tolerance_pct", 0.15))
+
+        atr_val = float(ind.atr(high, low, close, 14).iloc[-1])
+        if atr_val <= 0:
+            return None
+
+        # Step 1: Find key level (recent swing high or low within last 30 bars)
+        n = len(close)
+        lookback = min(30, n - 5)
+
+        # Find swing highs and lows
+        swing_highs = []
+        swing_lows = []
+        for i in range(3, lookback - 3):
+            idx = n - lookback + i
+            if high.iloc[idx] == max(high.iloc[idx-3:idx+4]):
+                swing_highs.append((idx, float(high.iloc[idx])))
+            if low.iloc[idx] == min(low.iloc[idx-3:idx+4]):
+                swing_lows.append((idx, float(low.iloc[idx])))
+
+        if not swing_highs and not swing_lows:
+            return None
+
+        # Step 2: Check for spike breakout of a key level (in last 5-10 candles)
+        current = float(close.iloc[-1])
+        signal = None
+
+        # Check bullish breakout: price broke above a swing high then came back
+        for sh_idx, sh_price in reversed(swing_highs[-5:]):
+            # Was there a spike above this level?
+            broke_above = False
+            spike_candle = -1
+            for j in range(sh_idx + 1, n - 1):
+                body = abs(float(close.iloc[j]) - float(open_.iloc[j]))
+                if float(close.iloc[j]) > sh_price and body / atr_val >= 1.0:
+                    broke_above = True
+                    spike_candle = j
+                    break
+
+            if not broke_above or spike_candle < 0:
+                continue
+
+            # Is current price near the broken level? (retest)
+            tolerance = sh_price * (retest_tolerance_pct / 100)
+            if abs(current - sh_price) <= tolerance and current >= sh_price - tolerance:
+                # Confirm: current candle shows bullish reaction at level
+                if close.iloc[-1] > open_.iloc[-1] and float(low.iloc[-1]) <= sh_price + tolerance:
+                    signal = {
+                        "side": "long",
+                        "level": sh_price,
+                        "spike_idx": spike_candle,
+                    }
+                    break
+
+        # Check bearish breakout: price broke below a swing low then came back
+        if signal is None:
+            for sl_idx, sl_price in reversed(swing_lows[-5:]):
+                broke_below = False
+                spike_candle = -1
+                for j in range(sl_idx + 1, n - 1):
+                    body = abs(float(close.iloc[j]) - float(open_.iloc[j]))
+                    if float(close.iloc[j]) < sl_price and body / atr_val >= 1.0:
+                        broke_below = True
+                        spike_candle = j
+                        break
+
+                if not broke_below or spike_candle < 0:
+                    continue
+
+                tolerance = sl_price * (retest_tolerance_pct / 100)
+                if abs(current - sl_price) <= tolerance and current <= sl_price + tolerance:
+                    if close.iloc[-1] < open_.iloc[-1] and float(high.iloc[-1]) >= sl_price - tolerance:
+                        signal = {
+                            "side": "short",
+                            "level": sl_price,
+                            "spike_idx": spike_candle,
+                        }
+                        break
+
+        if signal is None:
+            return None
+
+        vol_avg = volume.rolling(20).mean().iloc[-1]
+        vol_ratio = float(volume.iloc[-1] / vol_avg) if vol_avg > 0 else 1.0
+
+        score = float(np.clip(0.65 + 0.10 * min(vol_ratio / 2, 1) + 0.05, 0, 1))
+
+        return StrategyHit(self.name, ctx.get("timeframe", "?"),
+                           score=round(score, 4), weight=self.weight,
+                           detail={"side": signal["side"],
+                                   "level": round(signal["level"], 6),
+                                   "vol_ratio": round(vol_ratio, 2),
+                                   "setup": "pro_btb"})
+
+
+# ==========================================================
+# 13) SP2L — Spike 2 Legs (Higher Lows / Lower Highs Entry)
+# ==========================================================
+class ScalpSP2L(BaseScalpStrategy):
+    """SP2L Strategy: Enter within a spike using consecutive HL/LH structure.
+    
+    Logic:
+    1. Detect a spike: series of large candles in one direction (momentum flow)
+    2. During bullish spike: candles form consecutive Higher Lows
+    3. Each HL becomes a buy entry when retested
+    4. During bearish spike: candles form consecutive Lower Highs
+    5. Each LH becomes a sell entry when retested
+    6. SL below spike origin, TP at 1:2 RR
+    
+    Based on: Mohammad Ali Poursamadi's SP2L (Spike-2Leg) methodology
+    Timeframe: 1m-5m-15m
+    """
+    name = "scalp_sp2l"
+    default_weight = 1.3
+
+    def evaluate(self, df: pd.DataFrame, ctx: Dict[str, Any]) -> Optional[StrategyHit]:
+        if not self.enabled or len(df) < 15:
+            return None
+
+        close = df["close"].astype(float)
+        open_ = df["open"].astype(float)
+        high = df["high"].astype(float)
+        low = df["low"].astype(float)
+        volume = df["volume"].astype(float)
+
+        min_spike_bars = int(self.params.get("min_spike_bars", 3))
+        min_body_atr = float(self.params.get("min_body_atr", 0.8))
+
+        atr_val = float(ind.atr(high, low, close, 14).iloc[-1])
+        if atr_val <= 0:
+            return None
+
+        n = len(close)
+
+        # Step 1: Detect spike — consecutive large candles in same direction
+        # Look back up to 10 candles for a spike
+        bullish_spike = self._detect_spike(open_, close, high, low, atr_val, n, "bullish", min_spike_bars, min_body_atr)
+        bearish_spike = self._detect_spike(open_, close, high, low, atr_val, n, "bearish", min_spike_bars, min_body_atr)
+
+        signal = None
+
+        # Step 2: Check for HL/LH entry opportunity
+        if bullish_spike is not None:
+            spike_start, spike_end = bullish_spike
+            # Check consecutive Higher Lows after spike start
+            hls = []
+            for i in range(spike_start, min(spike_end + 3, n)):
+                hls.append(float(low.iloc[i]))
+
+            # Need at least 2 consecutive HLs
+            consecutive_hl = 0
+            for i in range(1, len(hls)):
+                if hls[i] > hls[i-1]:
+                    consecutive_hl += 1
+                else:
+                    break
+
+            if consecutive_hl >= 2:
+                # Entry: current price retesting the last HL
+                last_hl = hls[-1] if hls else 0
+                current = float(close.iloc[-1])
+                tolerance = atr_val * 0.3
+
+                # Price near last HL and bouncing
+                if abs(current - last_hl) <= tolerance or (float(low.iloc[-1]) <= last_hl + tolerance and current > last_hl):
+                    if close.iloc[-1] > open_.iloc[-1]:  # Bullish confirmation candle
+                        signal = {"side": "long", "spike_start": spike_start, "hl_count": consecutive_hl, "entry_level": last_hl}
+
+        if signal is None and bearish_spike is not None:
+            spike_start, spike_end = bearish_spike
+            lhs = []
+            for i in range(spike_start, min(spike_end + 3, n)):
+                lhs.append(float(high.iloc[i]))
+
+            consecutive_lh = 0
+            for i in range(1, len(lhs)):
+                if lhs[i] < lhs[i-1]:
+                    consecutive_lh += 1
+                else:
+                    break
+
+            if consecutive_lh >= 2:
+                last_lh = lhs[-1] if lhs else 0
+                current = float(close.iloc[-1])
+                tolerance = atr_val * 0.3
+
+                if abs(current - last_lh) <= tolerance or (float(high.iloc[-1]) >= last_lh - tolerance and current < last_lh):
+                    if close.iloc[-1] < open_.iloc[-1]:
+                        signal = {"side": "short", "spike_start": spike_start, "hl_count": consecutive_lh, "entry_level": last_lh}
+
+        if signal is None:
+            return None
+
+        vol_avg = volume.rolling(20).mean().iloc[-1]
+        vol_ratio = float(volume.iloc[-1] / vol_avg) if vol_avg > 0 else 1.0
+
+        hl_bonus = min(signal.get("hl_count", 2) * 0.05, 0.15)
+        score = float(np.clip(0.55 + hl_bonus + 0.10 * min(vol_ratio / 2, 1), 0, 1))
+
+        return StrategyHit(self.name, ctx.get("timeframe", "?"),
+                           score=round(score, 4), weight=self.weight,
+                           detail={"side": signal["side"],
+                                   "hl_count": signal.get("hl_count", 0),
+                                   "entry_level": round(signal.get("entry_level", 0), 6),
+                                   "vol_ratio": round(vol_ratio, 2),
+                                   "setup": "sp2l"})
+
+    def _detect_spike(self, open_, close, high, low, atr, n, direction, min_bars, min_body_atr):
+        """Detect a spike (consecutive large directional candles)."""
+        # Scan last 10 candles for a sequence of min_bars large candles
+        for start in range(n - 10, n - min_bars):
+            if start < 0:
+                continue
+            count = 0
+            for i in range(start, min(start + 8, n)):
+                body = abs(float(close.iloc[i]) - float(open_.iloc[i]))
+                body_ratio = body / max(atr, 1e-10)
+                is_dir = (close.iloc[i] > open_.iloc[i]) if direction == "bullish" else (close.iloc[i] < open_.iloc[i])
+                if body_ratio >= min_body_atr and is_dir:
+                    count += 1
+                else:
+                    if count >= min_bars:
+                        return (start, start + count - 1)
+                    break
+            if count >= min_bars:
+                return (start, start + count - 1)
+        return None
