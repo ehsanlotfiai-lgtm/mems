@@ -312,29 +312,48 @@ async function loadSignalWinRates() {
   try {
     const { win_rates } = await json('/api/trades/win-rates');
     if (!win_rates) return;
-    const periods = { '5m': 'hourly', '30m': 'hourly', '1h': 'hourly', '4h': '4hour', '24h': 'daily' };
-    const el5 = document.getElementById('sig_wr_5m');
+    
+    const periods = [
+      { key: 'hourly', label: 'آخرین ساعت' },
+      { key: '4hour', label: 'آخرین ۴ ساعت' },
+      { key: 'daily', label: 'امروز' },
+      { key: 'weekly', label: 'هفته اخیر' },
+    ];
+    
+    // Update the grid boxes
+    const el1h = document.getElementById('sig_wr_5m');
     const el30 = document.getElementById('sig_wr_30m');
-    const el1h = document.getElementById('sig_wr_1h');
+    const el1 = document.getElementById('sig_wr_1h');
     const el4h = document.getElementById('sig_wr_4h');
     const el24h = document.getElementById('sig_wr_24h');
     
     const hr = win_rates.hourly || {};
     const h4 = win_rates['4hour'] || {};
     const dy = win_rates.daily || {};
-    const all = win_rates.all || {};
+    const wk = win_rates.weekly || {};
     
-    const fmt = (d) => d && d.win_rate !== undefined ? d.win_rate + '%' : '—';
+    const fmt = (d) => {
+      if (!d || d.total === 0) return '—';
+      return d.win_rate + '%';
+    };
+    const sub = (d) => {
+      if (!d || d.total === 0) return '';
+      return `${d.wins}W/${d.losses}L`;
+    };
     const color = (d) => {
-      if (!d || d.win_rate === undefined) return '';
+      if (!d || d.total === 0) return 'color:var(--text-muted)';
       return d.win_rate >= 60 ? 'color:var(--success)' : d.win_rate >= 40 ? 'color:var(--accent)' : 'color:var(--danger)';
     };
     
-    if (el5) { el5.textContent = fmt(hr); el5.style = color(hr); }
-    if (el30) { el30.textContent = fmt(hr); el30.style = color(hr); }
-    if (el1h) { el1h.textContent = fmt(hr); el1h.style = color(hr); }
-    if (el4h) { el4h.textContent = fmt(h4); el4h.style = color(h4); }
-    if (el24h) { el24h.textContent = fmt(dy); el24h.style = color(dy); }
+    if (el1h) { el1h.innerHTML = `<span style="${color(hr)}">${fmt(hr)}</span><br><small style="color:var(--text-muted)">${sub(hr)}</small>`; }
+    if (el30) { el30.innerHTML = `<span style="${color(h4)}">${fmt(h4)}</span><br><small style="color:var(--text-muted)">${sub(h4)}</small>`; }
+    if (el1) { el1.innerHTML = `<span style="${color(dy)}">${fmt(dy)}</span><br><small style="color:var(--text-muted)">${sub(dy)}</small>`; }
+    if (el4h) { el4h.innerHTML = `<span style="${color(wk)}">${fmt(wk)}</span><br><small style="color:var(--text-muted)">${sub(wk)}</small>`; }
+    if (el24h) { 
+      // Total all-time
+      const all = win_rates.all || {};
+      el24h.innerHTML = `<span style="${color(all)}">${fmt(all)}</span><br><small style="color:var(--text-muted)">${sub(all)}</small>`; 
+    }
   } catch(e) { console.debug('Signal WR:', e); }
 }
 

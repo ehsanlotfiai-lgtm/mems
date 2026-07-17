@@ -276,26 +276,32 @@ class Storage:
         rows = list(reversed(rows))
         return [{"ts": r[0], "kind": r[1], "text": r[2]} for r in rows]
 
-    # ------------------------------------------ time-based win rates
+    # ------------------------------------------ time-based win rates (ALL trades)
     async def get_time_win_rates(self) -> dict:
+        """Win rates for SIGNAL tab only (exclude SCP_ and LIT_)."""
         now = time.time()
         windows = {
-            "daily": 86400,
             "hourly": 3600,
             "4hour": 14400,
+            "daily": 86400,
+            "weekly": 604800,
         }
         result = {}
         for label, seconds in windows.items():
             cutoff = now - seconds
             cur = await self.db.execute(
                 """SELECT pnl_pct, pnl_usdt, close_reason, opened_at
-                   FROM paper_trades WHERE opened_at >= ?""",
+                   FROM paper_trades 
+                   WHERE opened_at >= ? 
+                   AND signal_id NOT LIKE 'SCP_%' 
+                   AND signal_id NOT LIKE 'LIT_%'""",
                 (cutoff,)
             )
             rows = await cur.fetchall()
             closed_rows = [(p, pnl, r, o) for p, pnl, r, o in rows if p is not None]
             wins = sum(1 for p, _, _, _ in closed_rows if p > 0)
             losses = sum(1 for p, _, _, _ in closed_rows if p < 0)
+            risk_free = sum(1 for _, _, r, _ in closed_rows if r and 'risk_free' in str(r))
             open_count = sum(1 for p, _, _, _ in rows if p is None)
             total = len(closed_rows)
             total_pnl_pct = sum(p for p, _, _, _ in closed_rows)
@@ -309,6 +315,7 @@ class Storage:
                 "open": open_count,
                 "wins": wins,
                 "losses": losses,
+                "risk_free": risk_free,
                 "win_rate": round(win_rate, 1),
                 "avg_pnl_pct": round(avg_pnl, 2),
                 "avg_pnl_usdt": round(avg_pnl_usdt, 2),
