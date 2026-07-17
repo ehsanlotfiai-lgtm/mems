@@ -352,12 +352,66 @@ class Storage:
         rows = await cur.fetchall()
         cols = [d[0] for d in cur.description]
         out = []
+        sig_ids = []
         for r in rows:
             d = dict(zip(cols, r))
             d["hits"] = json.loads(d.pop("hits_json") or "[]")
             d["tf_breakdown"] = json.loads(d.pop("tf_breakdown_json") or "{}")
+            # entry_time == when the signal/trade actually opened (== created_at,
+            # kept as an explicit alias so the frontend never has to guess which
+            # field means "entry" vs. just "when the row was inserted").
+            d["entry_time"] = d.get("created_at")
+            d["exit_time"] = None
+            d["exit_price"] = None
+            d["close_reason"] = None
+            d["pnl_pct"] = None
             out.append(d)
+            sig_ids.append(d["id"])
+
+        if sig_ids:
+            placeholders = ",".join("?" for _ in sig_ids)
+            trade_cur = await self.db.execute(
+                f"""SELECT signal_id, opened_at, closed_at, exit_price, close_reason, pnl_pct
+                    FROM paper_trades WHERE signal_id IN ({placeholders})
+                    ORDER BY opened_at DESC""",
+                sig_ids,
+            )
+            trade_rows = await trade_cur.fetchall()
+            by_signal = {}
+            for sig_id, opened_at, closed_at, exit_price, close_reason, pnl_pct in trade_rows:
+                if sig_id not in by_signal:  # keep the most recent trade per signal
+                    by_signal[sig_id] = (opened_at, closed_at, exit_price, close_reason, pnl_pct)
+            for d in out:
+                t = by_signal.get(d["id"])
+                if t:
+                    opened_at, closed_at, exit_price, close_reason, pnl_pct = t
+                    if opened_at:
+                        d["entry_time"] = opened_at  # actual paper-trade open time
+                    d["exit_time"] = closed_at
+                    d["exit_price"] = exit_price
+                    d["close_reason"] = close_reason
+                    d["pnl_pct"] = pnl_pct
         return out
+
+    async def get_signal_by_id(self, signal_id: str) -> Optional[dict]:
+        cur = await self.db.execute("SELECT * FROM signals WHERE id=?", (signal_id,))
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        cols = [d[0] for d in cur.description]
+        d = dict(zip(cols, row))
+        d["hits"] = json.loads(d.pop("hits_json") or "[]")
+        d["tf_breakdown"] = json.loads(d.pop("tf_breakdown_json") or "{}")
+        return d
+
+    async def get_paper_trades_by_signal(self, signal_id: str) -> List[dict]:
+        """All paper trades (open or closed) linked to a signal, most recent first."""
+        cur = await self.db.execute(
+            "SELECT * FROM paper_trades WHERE signal_id=? ORDER BY opened_at DESC", (signal_id,)
+        )
+        rows = await cur.fetchall()
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, r)) for r in rows]
 
     async def get_scalp_win_rates(self) -> dict:
         now = time.time()

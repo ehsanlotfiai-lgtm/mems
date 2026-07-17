@@ -1523,6 +1523,10 @@ function renderScalpSignalCard(s) {
         <div class="level">SL<b>${fmtPrice(s.stop_loss)}</b></div>
         <div class="level" style="color:#38bdf8;background:rgba(56,189,248,0.1)">💲 فعلی<b>${livePrices[s.symbol] ? fmtPrice(livePrices[s.symbol]) : '...'}</b></div>
       </div>
+      <div class="levels" style="margin-top:4px">
+        <div class="level" style="color:#a1a8c3">🕐 زمان ورود<b style="font-size:11px">${fmtTime(s.entry_time || s.created_at)}</b></div>
+        ${s.exit_time ? `<div class="level" style="color:${(s.pnl_pct||0) >= 0 ? 'var(--success)' : 'var(--danger)'}">🏁 زمان خروج<b style="font-size:11px">${fmtTime(s.exit_time)}</b></div>` : ''}
+      </div>
       <div class="rationale">${s.rationale || ''}</div>
     </div>
   `;
@@ -1575,18 +1579,150 @@ function renderScalpHistory(signals) {
     const curPrice = livePrices[s.symbol] ? fmtPrice(livePrices[s.symbol]) : '...';
     const curColor = livePrices[s.symbol] ? (livePrices[s.symbol] > s.entry ? (s.side === 'long' ? 'var(--success)' : 'var(--danger)') : (s.side === 'long' ? 'var(--danger)' : 'var(--success)')) : '';
     const st = s.status || 'open';
+    const exitCell = s.exit_time
+      ? `${fmtTime(s.exit_time)}${s.pnl_pct != null ? ` <span style="color:${s.pnl_pct >= 0 ? 'var(--success)' : 'var(--danger)'}">(${s.pnl_pct >= 0 ? '+' : ''}${s.pnl_pct.toFixed(2)}%)</span>` : ''}`
+      : '—';
     return `
-    <tr>
-      <td>${fmtTime(s.created_at)}</td><td>${s.exchange}</td>
+    <tr class="clickable-row" style="cursor:pointer" onclick="showScalpTradeOnChart('${s.id}')" title="کلیک کنید تا نمودار این معامله نمایش داده شود">
+      <td>${fmtTime(s.entry_time || s.created_at)}</td><td>${s.exchange}</td>
       <td>${s.base || s.symbol}</td>
       <td class="${s.side}">${s.side.toUpperCase()}</td>
       <td>${s.score.toFixed(2)}</td>
       <td>${fmtPrice(s.entry)}</td><td>${fmtPrice(s.take_profit)}</td><td>${fmtPrice(s.stop_loss)}</td>
       <td style="color:${curColor};font-weight:bold">${curPrice}</td>
+      <td>${exitCell}</td>
       <td><span class="sig-badge-inline status-${st}">${statusFa[st] || st}</span></td>
       <td>${[...new Set(s.hits.map(h => h.name))].join(', ')}</td>
     </tr>`;
   }).join('');
+}
+
+/* ═══ Click a closed/open scalp trade row → show entry/exit/SL/TP on chart ═══ */
+let scalpTradeChart = null;
+let scalpTradeCandleSeries = null;
+let scalpTradePriceLines = [];
+
+async function showScalpTradeOnChart(signalId) {
+  const titleEl = $('#scalp_chart_title');
+  const detailEl = $('#scalp_chart_detail');
+  const container = document.getElementById('scalp_chart_container');
+  if (!container) return;
+  if (titleEl) titleEl.textContent = '⏳ در حال بارگذاری نمودار...';
+
+  // Highlight the clicked row
+  document.querySelectorAll('#scalp_history tr').forEach(r => { r.style.background = ''; });
+  document.querySelectorAll('#scalp_history tr').forEach(r => {
+    if (r.getAttribute('onclick') === `showScalpTradeOnChart('${signalId}')`) {
+      r.style.background = 'rgba(245,158,11,0.12)';
+    }
+  });
+
+  try {
+    const resp = await fetch(`/api/scalping/trade/${signalId}/chart`);
+    if (!resp.ok) { toast('اطلاعات این معامله پیدا نشد'); return; }
+    const data = await resp.json();
+    const sig = data.signal || {};
+    const trade = data.trade || null;
+    const m = data.markers || {};
+    const candles = data.candles || [];
+
+    const symLabel = sig.base || sig.symbol || '';
+    if (titleEl) {
+      titleEl.textContent = `📈 ${symLabel} — ${sig.side === 'long' ? '🟢 خرید' : '🔴 فروش'} (${data.timeframe || '5m'})`;
+    }
+
+    if (scalpTradeChart) { scalpTradeChart.remove(); scalpTradeChart = null; }
+    container.innerHTML = '';
+
+    if (!candles.length) {
+      container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted)">داده کندلی موجود نیست (احتمالا سیگنال DEX است)</div>';
+      if (detailEl) detailEl.textContent = '';
+      return;
+    }
+
+    scalpTradeChart = LightweightCharts.createChart(container, {
+      width: container.clientWidth, height: 420,
+      layout: { background: { color: '#0d1117' }, textColor: '#c9d1d9' },
+      grid: { vertLines: { color: 'rgba(48,54,61,0.5)' }, horzLines: { color: 'rgba(48,54,61,0.5)' } },
+      crosshair: { mode: 0 }, timeScale: { timeVisible: true, secondsVisible: false },
+      rightPriceScale: { borderColor: '#30363d' },
+    });
+    scalpTradeCandleSeries = scalpTradeChart.addCandlestickSeries({
+      upColor: '#22c55e', downColor: '#ef4444', borderUpColor: '#22c55e',
+      borderDownColor: '#ef4444', wickUpColor: '#22c55e', wickDownColor: '#ef4444',
+    });
+    const volSeries = scalpTradeChart.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: 'vol' });
+    scalpTradeChart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
+
+    const ohlc = candles.map(c => ({
+      time: Math.floor(c.timestamp / 1000), open: c.open, high: c.high, low: c.low, close: c.close,
+    }));
+    const vol = candles.map(c => ({
+      time: Math.floor(c.timestamp / 1000), value: c.volume,
+      color: c.close >= c.open ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)',
+    }));
+    scalpTradeCandleSeries.setData(ohlc);
+    volSeries.setData(vol);
+
+    // Price lines: entry / SL / TP / TP2
+    scalpTradePriceLines.forEach(pl => { try { scalpTradeCandleSeries.removePriceLine(pl); } catch(e) {} });
+    scalpTradePriceLines = [];
+    if (m.entry) scalpTradePriceLines.push(scalpTradeCandleSeries.createPriceLine({ price: m.entry, color: '#58a6ff', lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: '🔵 ورود' }));
+    if (m.take_profit) scalpTradePriceLines.push(scalpTradeCandleSeries.createPriceLine({ price: m.take_profit, color: '#22c55e', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '✅ TP1' }));
+    if (m.tp2) scalpTradePriceLines.push(scalpTradeCandleSeries.createPriceLine({ price: m.tp2, color: '#a855f7', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'TP2' }));
+    if (m.stop_loss) scalpTradePriceLines.push(scalpTradeCandleSeries.createPriceLine({ price: m.stop_loss, color: '#ef4444', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '❌ SL' }));
+    if (m.exit_price && m.exit_time) {
+      const exitColor = (m.pnl_pct || 0) >= 0 ? '#22c55e' : '#ef4444';
+      scalpTradePriceLines.push(scalpTradeCandleSeries.createPriceLine({ price: m.exit_price, color: exitColor, lineWidth: 1, lineStyle: 3, axisLabelVisible: true, title: '🏁 خروج' }));
+    }
+
+    // Markers: entry arrow (always) + exit circle (if closed)
+    const entryTime = Math.floor((m.entry_time || sig.created_at || 0));
+    const markers = [{
+      time: entryTime, position: sig.side === 'long' ? 'belowBar' : 'aboveBar',
+      color: sig.side === 'long' ? '#22c55e' : '#ef4444',
+      shape: sig.side === 'long' ? 'arrowUp' : 'arrowDown',
+      text: `🕐 ورود (${sig.side === 'long' ? 'LONG' : 'SHORT'})`,
+    }];
+    if (m.exit_time) {
+      const exitTime = Math.floor(m.exit_time);
+      if (exitTime !== entryTime) {
+        markers.push({
+          time: exitTime, position: sig.side === 'long' ? 'aboveBar' : 'belowBar',
+          color: (m.pnl_pct || 0) >= 0 ? '#22c55e' : '#ef4444', shape: 'circle',
+          text: `🏁 خروج (${m.close_reason || ''} ${m.pnl_pct != null ? (m.pnl_pct >= 0 ? '+' : '') + m.pnl_pct.toFixed(2) + '%' : ''})`,
+        });
+      }
+    }
+    markers.sort((a, b) => a.time - b.time);
+    try { scalpTradeCandleSeries.setMarkers(markers); } catch(e) { console.warn('setMarkers error:', e); }
+
+    // Zoom around the trade window
+    const tfSeconds = { '1m':60, '5m':300, '15m':900, '1h':3600 };
+    const step = tfSeconds[data.timeframe] || 300;
+    try {
+      scalpTradeChart.timeScale().setVisibleRange({
+        from: entryTime - step * 15,
+        to: (m.exit_time ? Math.floor(m.exit_time) : entryTime) + step * 15,
+      });
+    } catch(e) { scalpTradeChart.timeScale().fitContent(); }
+
+    if (detailEl) {
+      const statusFa2 = { open: '🟢 فعال', tp1: '✅ TP1', tp: '✅ سود', sl: '❌ ضرر', sl_risk_free: '🛡️ ریسک‌فری', timeout: '⏰ تایم‌اوت' };
+      detailEl.innerHTML = `
+        زمان ورود: <b>${fmtTime(m.entry_time || sig.created_at)}</b>
+        ${m.exit_time ? ` | زمان خروج: <b>${fmtTime(m.exit_time)}</b>` : ' | هنوز باز است'}
+        ${m.close_reason ? ` | نتیجه: <b>${statusFa2[m.close_reason] || m.close_reason}</b>` : ''}
+        ${m.pnl_pct != null ? ` | سود/ضرر: <b style="color:${m.pnl_pct >= 0 ? 'var(--success)' : 'var(--danger)'}">${m.pnl_pct >= 0 ? '+' : ''}${m.pnl_pct.toFixed(2)}%</b>` : ''}
+      `;
+    }
+
+    // Scroll chart into view
+    container.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  } catch (e) {
+    console.error('showScalpTradeOnChart error:', e);
+    toast('خطا در بارگذاری نمودار معامله');
+  }
 }
 
 function renderScalpWinRates(wr) {

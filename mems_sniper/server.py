@@ -723,6 +723,55 @@ def create_app(
             "setup_stats": setup_stats,
         }
 
+    @app.get("/api/scalping/trade/{signal_id}/chart")
+    async def api_scalp_trade_chart(signal_id: str) -> dict:
+        """Returns the scalp signal + its linked paper trade(s) (entry/exit time,
+        close reason, exit price) + OHLCV candles around the trade window, so the
+        frontend can draw entry/SL/TP/exit markers on a real chart for a closed
+        (or still-open) trade shown in the history table."""
+        s: Storage = _app_state["storage"]
+        await _ensure_storage(s)
+        sig = await s.get_signal_by_id(signal_id)
+        if not sig:
+            raise HTTPException(404, "سیگنال پیدا نشد")
+        trades = await s.get_paper_trades_by_signal(signal_id)
+        trade = trades[0] if trades else None
+
+        em: ExchangeManager = _app_state["em"]
+        exchange = sig["exchange"]
+        symbol = sig["symbol"]
+        is_dex = symbol.startswith("DEX:")
+        tf = "5m"
+        candles = []
+        if not is_dex:
+            sym = symbol.replace("_", "/")
+            if exchange not in em.clients:
+                await em.start()
+            try:
+                ohlcv = await em.fetch_ohlcv(exchange, sym, tf, limit=300)
+                candles = [c.__dict__ for c in ohlcv]
+            except Exception:  # noqa: BLE001
+                candles = []
+
+        return {
+            "signal": sig,
+            "trade": trade,
+            "candles": candles,
+            "timeframe": tf,
+            "markers": {
+                "entry": sig.get("entry"),
+                "stop_loss": (trade or {}).get("stop_loss") or sig.get("stop_loss"),
+                "take_profit": sig.get("take_profit"),
+                "tp2": sig.get("tp2"),
+                "side": sig.get("side"),
+                "entry_time": (trade or {}).get("opened_at") or sig.get("created_at"),
+                "exit_time": (trade or {}).get("closed_at"),
+                "exit_price": (trade or {}).get("exit_price"),
+                "close_reason": (trade or {}).get("close_reason"),
+                "pnl_pct": (trade or {}).get("pnl_pct"),
+            },
+        }
+
     @app.post("/api/scalping/test")
     async def api_scalp_test() -> dict:
         try:

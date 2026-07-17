@@ -163,14 +163,23 @@
         <!-- Live Scalp Signals -->
         <div id="scalp_signals_live" class="signal-grid"></div>
 
+        <!-- Trade Chart (opens when a history row is clicked) -->
+        <div class="settings-card" style="padding:6px;margin-top:14px">
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px">
+            <span style="font-weight:bold;font-size:14px" id="scalp_chart_title">📈 برای مشاهده نمودار روی یک ردیف از تاریخچه کلیک کنید</span>
+          </div>
+          <div id="scalp_chart_container" style="height:420px;width:100%"></div>
+          <div id="scalp_chart_detail" style="padding:6px 10px;font-size:12px;color:var(--text-muted)"></div>
+        </div>
+
         <!-- History Table -->
-        <h3>تاریخچه سیگنال‌های اسکلپ</h3>
+        <h3>تاریخچه سیگنال‌های اسکلپ (برای نمایش نمودار روی ردیف کلیک کنید)</h3>
         <div class="table-wrap">
           <table class="data-table">
             <thead>
               <tr>
-                <th>زمان</th><th>صرافی</th><th>نماد</th><th>سمت</th><th>امتیاز</th>
-                <th>ورود</th><th>TP</th><th>SL</th><th>💲 فعلی</th><th>وضعیت</th><th>روش‌ها</th>
+                <th>زمان ورود</th><th>صرافی</th><th>نماد</th><th>سمت</th><th>امتیاز</th>
+                <th>ورود</th><th>TP</th><th>SL</th><th>💲 فعلی</th><th>زمان خروج</th><th>وضعیت</th><th>روش‌ها</th>
               </tr>
             </thead>
             <tbody id="scalp_history"></tbody>

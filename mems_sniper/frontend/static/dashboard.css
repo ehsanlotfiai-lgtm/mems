@@ -823,3 +823,9 @@ h2, h3 { font-size: 18px; margin: 14px 0 10px; }
   margin-top: 6px;
   line-height: 1.5;
 }
+
+
+/* Clickable history rows (scalp trade → chart) */
+.clickable-row:hover {
+  background: rgba(245, 158, 11, 0.08) !important;
+}
