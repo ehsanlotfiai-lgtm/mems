@@ -108,6 +108,18 @@ class ExecutionEngine:
         if risk_distance <= 0:
             return self._invalid("Risk distance <= 0")
 
+        # ── Minimum distance check (must cover 3x commission) ──
+        commission_pct = 0.075  # Binance futures taker fee per side
+        min_profit_pct = commission_pct * 2 * 3  # Need 3x round-trip commission = 0.45%
+        min_risk_distance = ideal_entry * (min_profit_pct / 100) / self.min_rr
+        if risk_distance < min_risk_distance:
+            # Widen SL to minimum viable distance
+            if side == "long":
+                stop_buffered = ideal_entry - min_risk_distance
+            else:
+                stop_buffered = ideal_entry + min_risk_distance
+            risk_distance = min_risk_distance
+
         stop_pct = (risk_distance / max(ideal_entry, 1e-10)) * 100
         stop_atr = risk_distance / max(atr, 1e-10)
 
@@ -122,6 +134,12 @@ class ExecutionEngine:
         # ── R:R Validation ──
         if rr2 < self.min_rr:
             return self._invalid(f"RR to TP2 ({rr2:.1f}) < min ({self.min_rr})")
+
+        # ── Commission profitability check ──
+        tp1_profit_pct = abs(tp1 - ideal_entry) / max(ideal_entry, 1e-10) * 100
+        round_trip_commission_pct = commission_pct * 2  # 0.15%
+        if tp1_profit_pct <= round_trip_commission_pct * 2:
+            return self._invalid(f"TP1 profit ({tp1_profit_pct:.3f}%) too small vs commission ({round_trip_commission_pct:.3f}%)")
 
         # ── Position Sizing ──
         risk_amount = self.balance * (self.risk_pct / 100.0)
@@ -307,29 +325,29 @@ class ExecutionEngine:
         self, candidate: SetupCandidate, entry: float,
         risk: float, liq_map: LiquidityMap, side: str,
     ):
-        """Calculate TP1/TP2/TP3."""
+        """Calculate TP1/TP2/TP3 with minimum profitability guarantee."""
+        # Ensure minimum TP distance (must be > 0.5% for commission coverage)
+        min_tp_distance = entry * 0.005  # At least 0.5% from entry
+        effective_risk = max(risk, min_tp_distance / 1.5)
+
         if side == "long":
-            # TP1: nearest internal or 1.5R
-            tp1 = entry + risk * 1.5
-            # TP2: next liquidity or 2.5R
+            tp1 = entry + max(effective_risk * 1.5, min_tp_distance)
             if candidate.target_pool:
-                tp2 = candidate.target_pool.price
+                tp2 = max(candidate.target_pool.price, entry + effective_risk * 2.5)
             else:
-                tp2 = entry + risk * 2.5
-            # TP3: extended 4R
-            tp3 = entry + risk * 4.0
-            # Ensure order
-            tp2 = max(tp2, tp1 + risk * 0.5)
-            tp3 = max(tp3, tp2 + risk * 0.5)
+                tp2 = entry + effective_risk * 2.5
+            tp3 = entry + effective_risk * 4.0
+            tp2 = max(tp2, tp1 + effective_risk * 0.5)
+            tp3 = max(tp3, tp2 + effective_risk * 0.5)
         else:
-            tp1 = entry - risk * 1.5
+            tp1 = entry - max(effective_risk * 1.5, min_tp_distance)
             if candidate.target_pool:
-                tp2 = candidate.target_pool.price
+                tp2 = min(candidate.target_pool.price, entry - effective_risk * 2.5)
             else:
-                tp2 = entry - risk * 2.5
-            tp3 = entry - risk * 4.0
-            tp2 = min(tp2, tp1 - risk * 0.5)
-            tp3 = min(tp3, tp2 - risk * 0.5)
+                tp2 = entry - effective_risk * 2.5
+            tp3 = entry - effective_risk * 4.0
+            tp2 = min(tp2, tp1 - effective_risk * 0.5)
+            tp3 = min(tp3, tp2 - effective_risk * 0.5)
         return tp1, tp2, tp3
 
     def _suggest_leverage(self, rr: float, stop_atr: float, candidate: SetupCandidate) -> int:

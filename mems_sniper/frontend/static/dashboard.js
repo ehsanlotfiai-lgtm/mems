@@ -106,6 +106,25 @@ async function refreshState() {
     stateCache.universe = st.universe;
     renderUniverse();
   } catch (e) { console.error(e); }
+  // Fetch live BTC/ETH prices
+  try {
+    const btcResp = await fetch('/api/chart/binance/BTC_USDT/1m?limit=1');
+    const btcData = await btcResp.json();
+    if (btcData.candles && btcData.candles.length > 0) {
+      const p = btcData.candles[btcData.candles.length - 1].close;
+      const el = document.getElementById('live_btc');
+      if (el) el.textContent = '$' + Number(p).toLocaleString('en-US', {maximumFractionDigits: 0});
+      livePrices['BTC/USDT'] = p;
+    }
+    const ethResp = await fetch('/api/chart/binance/ETH_USDT/1m?limit=1');
+    const ethData = await ethResp.json();
+    if (ethData.candles && ethData.candles.length > 0) {
+      const p = ethData.candles[ethData.candles.length - 1].close;
+      const el = document.getElementById('live_eth');
+      if (el) el.textContent = '$' + Number(p).toLocaleString('en-US', {maximumFractionDigits: 1});
+      livePrices['ETH/USDT'] = p;
+    }
+  } catch(e) { /* non-critical */ }
 }
 
 /* ---------- MARKET SENTIMENT ---------- */
@@ -1749,6 +1768,15 @@ function connectWS() {
       if (total > 0) toast(`🎯 شکارچی: ${total} فرصت میم‌کوین شناسایی شد`);
     } else if (d.type === 'live_prices') {
       livePrices = d.data || {};
+      // Update header live prices
+      if (livePrices['BTC/USDT']) {
+        const el = document.getElementById('live_btc');
+        if (el) el.textContent = '$' + Number(livePrices['BTC/USDT']).toLocaleString('en-US', {maximumFractionDigits: 0});
+      }
+      if (livePrices['ETH/USDT']) {
+        const el = document.getElementById('live_eth');
+        if (el) el.textContent = '$' + Number(livePrices['ETH/USDT']).toLocaleString('en-US', {maximumFractionDigits: 1});
+      }
       // Update positions table with live prices if visible
       if ($('#tab-positions')?.classList.contains('active')) {
         loadTrades();
