@@ -958,9 +958,11 @@ class ForwardEngine:
             await asyncio.sleep(eval_interval)
 
     async def _handle_lit_signal(self, signal) -> None:
+        """Save LIT signal to DB and emit to dashboard."""
         storage: Storage = self.storage
         risk: RiskEngine = self.risk
         from config.settings import get_settings
+        from core.models import Side
         s = get_settings()
         try:
             last_signal = await storage.get_last_signal(signal.symbol, minutes=15)
@@ -976,22 +978,37 @@ class ForwardEngine:
             sl_distance = abs(entry - sl)
             if sl_distance < 1e-10:
                 return
-            position_size = round((balance * risk_pct / 100) / sl_distance, 6)
-            if position_size <= 0:
-                return
+
+            # Convert side string to Side enum
+            side_enum = Side.LONG if signal.side == "long" else Side.SHORT
 
             signal_record = Signal(
-                id=signal.id, symbol=signal.symbol, side=signal.side,
-                strategy=signal.strategy, entry=entry, stop_loss=sl,
-                take_profit=tp, score=signal.score, confidence=signal.score,
-                reasoning=signal.reasoning, created_at=time.time(),
-                expires_at=time.time() + 1800,
-                hits=[], tf_breakdown={},
-                tp2=tp2, exchange="binance", market_type="futures",
+                id=signal.id,
+                created_at=time.time(),
+                exchange="binance",
+                symbol=signal.symbol,
+                side=side_enum,
+                price=entry,
+                score=signal.score,
+                hits=[],
+                confluence_tf_breakdown={},
+                entry=entry,
+                stop_loss=sl,
+                take_profit=tp,
+                trailing_atr=0.0,
+                atr=signal.debug.get("atr", 0) if hasattr(signal, 'debug') and signal.debug else 0,
                 position_size_usdt=balance * risk_pct / 100,
+                risk_pct=risk_pct,
+                rationale=signal.reasoning,
+                base=signal.symbol.split("/")[0] if "/" in signal.symbol else signal.symbol,
+                tp2=tp2,
+                tp3=getattr(signal, 'take_profit_3', None) or (tp2 * 1.3 if tp2 else None),
             )
             await storage.save_signal(signal_record)
-            self._emit_dashboard({"type": "signal", "signal": signal_record.to_dict()})
+
+            # Emit to dashboard with full LIT data (chart_annotations, etc.)
+            lit_data = signal.to_dict() if hasattr(signal, 'to_dict') else {"id": signal.id}
+            self._emit_dashboard({"type": "lit_signal", "signal": lit_data})
 
             pos = risk.open_from_signal(signal_record)
             if pos:

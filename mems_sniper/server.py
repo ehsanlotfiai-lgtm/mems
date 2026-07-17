@@ -866,7 +866,7 @@ def create_app(
             return _SimpleDF(data)
 
         @app.get("/api/lit/signals")
-        async def api_lit_signals(days: int = 3) -> dict:
+        async def api_lit_signals(days: int = 7) -> dict:
             s: Storage = _app_state["storage"]
             await _ensure_storage(s)
             try:
