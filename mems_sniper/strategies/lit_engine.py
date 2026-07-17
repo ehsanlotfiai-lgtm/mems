@@ -354,14 +354,14 @@ class LITEngine:
             disp_dir = "bearish"
 
         # Need recent displacement
-        disp = get_recent_displacement(structure, disp_dir, max_bars_ago=15, current_idx=n-1)
+        disp = get_recent_displacement(structure, disp_dir, max_bars_ago=50, current_idx=n-1)
         if disp is None:
             return None
 
         # Need structure confirmation (BOS or CHoCH)
-        struct_event = get_recent_bos(structure, max_bars_ago=20, current_idx=n-1)
+        struct_event = get_recent_bos(structure, max_bars_ago=50, current_idx=n-1)
         if struct_event is None:
-            struct_event = get_recent_choch(structure, max_bars_ago=20, current_idx=n-1)
+            struct_event = get_recent_choch(structure, max_bars_ago=50, current_idx=n-1)
         if struct_event is None:
             return None
 

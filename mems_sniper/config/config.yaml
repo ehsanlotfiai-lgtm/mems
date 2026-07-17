@@ -459,6 +459,10 @@ lit:
   universe_size: 20
   special_symbols:
     - "PAXG/USDT"
+    - "BTC/USDT"
+    - "ETH/USDT"
+    - "SOL/USDT"
+    - "XAU/USDT"
 
   # ── Timeframes ──
   # Bias: 1h + 4h | Setup detection: 15m | Trigger: 5m

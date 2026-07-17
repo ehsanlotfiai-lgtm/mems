@@ -129,7 +129,7 @@ class StructureEngine:
         self._classify_swings(swing_highs, swing_lows)
 
         # Step 3: Detect structure breaks (BOS/CHoCH)
-        events = self._detect_structure_breaks(swing_highs, swing_lows, closes, timestamps)
+        events = self._detect_structure_breaks(swing_highs, swing_lows, opens, highs, lows, closes, timestamps)
 
         # Step 4: Determine trend
         trend = self._determine_trend(swing_highs, swing_lows, events)
@@ -228,7 +228,7 @@ class StructureEngine:
 
     def _detect_structure_breaks(
         self, swing_highs: List[SwingPoint], swing_lows: List[SwingPoint],
-        closes: np.ndarray, timestamps: Optional[np.ndarray],
+        opens: np.ndarray, highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, timestamps: Optional[np.ndarray],
     ) -> List[StructureBreak]:
         """Detect BOS and CHoCH events."""
         events = []
