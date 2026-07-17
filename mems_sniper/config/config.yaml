@@ -234,7 +234,7 @@ risk:
   trailing_atr_mult: 0.8
   max_open_positions: 4
   daily_max_loss_pct: 5.0
-  max_position_age_seconds: 14400   # 4h برای سیگنال‌های ساعتی
+  max_position_age_seconds: 3600    # 1h max — close stale positions
 
 # ------------------------------------------------------------
 # Backtest

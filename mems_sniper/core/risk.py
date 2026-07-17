@@ -179,64 +179,27 @@ class RiskEngine:
                     pos.stop_loss = new_sl
 
     def _check_exit(self, pos: PaperPosition, price: float) -> Optional[PaperPosition]:
-        """Multi-TP exit with risk-free management.
+        """Exit logic: SL/TP check with immediate close on TP1.
 
-        TP1 hit → risk-free (SL → breakeven), trade is a WIN.
-        TP2 hit → partial close (50% qty, lock profit).
-        TP3 hit → full close (remaining qty).
-        SL hit → close all (loss).
+        For scalp/signal positions:
+        - TP1 hit → CLOSE immediately (record as win)
+        - SL hit → CLOSE immediately (record as loss)
+        
+        This ensures win-rate tracking works properly.
+        Trailing stop still active if price runs further before close.
         """
-        use_risk_free = bool(self.risk.get("risk_free_after_tp1", True))
-
         if pos.side == Side.LONG:
-            # --- TP1 hit: risk-free + mark win ---
-            if not pos.tp1_hit and price >= pos.take_profit:
-                pos.tp1_hit = True
-                if use_risk_free:
-                    pos.risk_free = True
-                    pos.stop_loss = pos.entry  # SL → breakeven
-                logger.info(
-                    f"TP1 HIT {pos.symbol} @ {price:.6f} — "
-                    f"{'RISK-FREE (SL→breakeven)' if use_risk_free else 'TP1 hit'}"
-                )
-                # TP1 hit = WIN — calculate profit percentage independently
-                if pos.side == Side.LONG:
-                    pos.unrealized_pnl_pct = round((price - pos.entry) / pos.entry * 100, 2)
-                else:
-                    pos.unrealized_pnl_pct = round((pos.entry - price) / pos.entry * 100, 2)
-                # Don't close yet — let it run to TP2/TP3
-            # --- TP2 hit: partial close (50%) ---
-            if pos.tp1_hit and pos.tp2 and price >= pos.tp2:
-                # Close half at TP2
-                partial_pnl = (price - pos.entry) * (pos.qty * 0.5)
-                pos.tp2 = None  # mark TP2 as done
-                return self._close(pos, price, "tp2")
-            # --- TP3 hit: full close ---
-            if pos.tp1_hit and pos.tp3 and price >= pos.tp3:
-                return self._close(pos, price, "tp3")
+            # --- TP1 hit: CLOSE with profit ---
+            if price >= pos.take_profit:
+                return self._close(pos, price, "tp1")
             # --- SL hit ---
             if price <= pos.stop_loss:
                 reason = "sl_risk_free" if pos.risk_free else "sl"
                 return self._close(pos, price, reason)
         else:  # SHORT
-            # --- TP1 hit: risk-free ---
-            if not pos.tp1_hit and price <= pos.take_profit:
-                pos.tp1_hit = True
-                if use_risk_free:
-                    pos.risk_free = True
-                    pos.stop_loss = pos.entry
-                logger.info(
-                    f"TP1 HIT {pos.symbol} @ {price:.6f} — "
-                    f"{'RISK-FREE (SL→breakeven)' if use_risk_free else 'TP1 hit'}"
-                )
-                pos.unrealized_pnl_pct = round((pos.entry - price) / pos.entry * 100, 2)
-            # --- TP2 hit: partial close ---
-            if pos.tp1_hit and pos.tp2 and price <= pos.tp2:
-                pos.tp2 = None
-                return self._close(pos, price, "tp2")
-            # --- TP3 hit: full close ---
-            if pos.tp1_hit and pos.tp3 and price <= pos.tp3:
-                return self._close(pos, price, "tp3")
+            # --- TP1 hit: CLOSE with profit ---
+            if price <= pos.take_profit:
+                return self._close(pos, price, "tp1")
             # --- SL hit ---
             if price >= pos.stop_loss:
                 reason = "sl_risk_free" if pos.risk_free else "sl"
