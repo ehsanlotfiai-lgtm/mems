@@ -61,7 +61,12 @@ SCHEMA = [
         leverage REAL DEFAULT 1.0,
         market_type TEXT DEFAULT 'spot',
         fee_usdt REAL DEFAULT 0.0,
-        slippage_usdt REAL DEFAULT 0.0
+        slippage_usdt REAL DEFAULT 0.0,
+        tp2 REAL,
+        tp3 REAL,
+        tp1_hit INTEGER DEFAULT 0,
+        risk_free INTEGER DEFAULT 0,
+        unrealized_pnl_pct REAL
     )
     """,
     """
