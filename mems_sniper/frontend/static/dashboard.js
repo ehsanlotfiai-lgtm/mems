@@ -1876,6 +1876,12 @@ const LIT_STRATEGY_NAMES = {
   'order_block':     { fa: '🧱 بلاک سفارش', full: 'Order Block' },
   'power_of_three':  { fa: '⚡ سه‌گانه قدرت', full: 'Power of Three' },
   'vector_bos':      { fa: '🎯 شکست ساختار', full: 'Vector BOS' },
+  'sweep_reversal':  { fa: '🌊 شکار و برگشت', full: 'Sweep Reversal' },
+  'inducement_continuation': { fa: '🎯 تله و ادامه', full: 'Inducement Continuation' },
+  'range_expansion': { fa: '📐 محدوده به انبساط', full: 'Range Expansion' },
+  'fvg_retest':      { fa: '📦 ریتست FVG', full: 'FVG Retest' },
+  'displacement_entry': { fa: '💥 ورود با جابجایی', full: 'Displacement Entry' },
+  'lit_structure':   { fa: '📊 ساختار LIT', full: 'LIT Structure' },
 };
 
 const LIT_STRATEGY_EDUCATION = {
@@ -1983,7 +1989,7 @@ function litClearAll() {
 // ═══ Live Signals ═══
 async function loadLitSignals() {
   try {
-    const resp = await fetch('/api/lit/signals?days=3');
+    const resp = await fetch('/api/lit/signals?days=10');
     const data = await resp.json();
     litLiveSignals = data.signals || [];
     renderLitLiveList();
@@ -2016,7 +2022,8 @@ function renderLitLiveList() {
 
   tbody.innerHTML = filtered.map((s) => {
     const sideFa = s.side === 'long' ? '🟢' : '🔴';
-    const strat = LIT_STRATEGY_NAMES[s.strategy]?.fa || s.strategy;
+    const strat = LIT_STRATEGY_NAMES[s.strategy]?.fa || s.strategy || 'LIT';
+    const tf = s.timeframe || '15m';
     const status = s.status || 'open';
     const statusFa = { open: '🟢 فعال', win: '✅ سود', loss: '❌ ضرر', expired: '⏰ منقضی' }[status] || status;
     const time = s.created_at ? new Date(s.created_at * 1000).toLocaleString('fa-IR', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '—';
@@ -2026,7 +2033,7 @@ function renderLitLiveList() {
       <td style="font-size:11px">${time}</td>
       <td><b>${s.symbol}</b></td>
       <td>${sideFa} ${s.side}</td>
-      <td style="font-size:11px">${strat}</td>
+      <td style="font-size:11px">${strat} <span style="color:var(--text-muted)">(${tf})</span></td>
       <td>${fmtPrice(s.entry)}</td>
       <td style="color:var(--success);font-size:11px">${fmtPrice(s.take_profit)}</td>
       <td style="color:var(--danger);font-size:11px">${fmtPrice(s.stop_loss)}</td>
@@ -2051,7 +2058,7 @@ async function showLitSignalOnChart(signalId) {
 
   // Fetch candles
   const container = document.getElementById('lit_live_chart_container');
-  document.getElementById('lit_live_chart_title').textContent = `📈 ${sig.symbol} — ${LIT_STRATEGY_NAMES[sig.strategy]?.fa || sig.strategy}`;
+  document.getElementById('lit_live_chart_title').textContent = `📈 ${sig.symbol} — ${LIT_STRATEGY_NAMES[sig.strategy]?.fa || sig.strategy || 'LIT'} (${sig.timeframe || '15m'})`;
 
   try {
     const tf = '15m';

@@ -866,7 +866,7 @@ def create_app(
             return _SimpleDF(data)
 
         @app.get("/api/lit/signals")
-        async def api_lit_signals(days: int = 7) -> dict:
+        async def api_lit_signals(days: int = 10) -> dict:
             s: Storage = _app_state["storage"]
             await _ensure_storage(s)
             try:
@@ -887,6 +887,22 @@ def create_app(
                             val = d.pop(k)
                             new_key = k.replace("_json", "")
                             d[new_key] = _json.loads(val or "[]")
+                    # Extract strategy from rationale or id
+                    rationale = d.get("rationale", "") or ""
+                    if "Sweep-Reversal" in rationale or "sweep_reversal" in rationale:
+                        d["strategy"] = "sweep_reversal"
+                    elif "Inducement" in rationale or "inducement" in rationale:
+                        d["strategy"] = "inducement_continuation"
+                    elif "Range" in rationale or "range" in rationale:
+                        d["strategy"] = "range_expansion"
+                    elif "FVG" in rationale:
+                        d["strategy"] = "fvg_retest"
+                    elif "displacement" in rationale.lower():
+                        d["strategy"] = "displacement_entry"
+                    else:
+                        d["strategy"] = "lit_structure"
+                    # Add timeframe info
+                    d["timeframe"] = "15m"  # LIT trigger TF
                     signals.append(d)
                 return {"signals": signals, "count": len(signals)}
             except Exception as exc:
