@@ -286,3 +286,11 @@ def higher_tf_trend(close: pd.Series, length: int = 50) -> str:
     elif pct_diff < -2:
         return "bearish"
     return "neutral"
+
+
+# ============================================================
+# Aliases for backward compatibility
+# ============================================================
+ema_indicator = ema
+adx_indicator = adx
+vwap_indicator = vwap

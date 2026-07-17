@@ -125,11 +125,13 @@ class ScalpingEngine:
         if unique_strategies < self.min_unique_strategies:
             return None
 
-        # Gate: volume check — reject low-volume spikes
+        # Gate: volume check — reject low-volume spikes (soft check)
         vol_avg = trigger_df["volume"].astype(float).rolling(20).mean().iloc[-1]
         vol_now = float(trigger_df["volume"].astype(float).iloc[-1])
         if vol_avg > 0 and vol_now / vol_avg < self.min_volume_ratio:
-            return None
+            # Allow through if multiple strategies agree strongly
+            if unique_strategies < 3:
+                return None
 
         # Gate: at least 1 timeframe must agree
         tfs_with_hits = set(h.timeframe for h in all_hits)
@@ -268,8 +270,15 @@ class ScalpingEngine:
         if htf_label is None:
             htf_label = {"bullish": "🟢 صعودی", "bearish": "🔴 نزولی", "neutral": "➡️ خنثی"}
         htf_str = htf_label.get(htf_trend, "نامشخص")
+        # Leverage recommendation for scalp
+        if final >= 0.65:
+            lev_rec = "اهرم: 5x-10x"
+        elif final >= 0.45:
+            lev_rec = "اهرم: 3x-5x"
+        else:
+            lev_rec = "اسپات یا 2x-3x"
         return (
             f"⚡ اسکلپ {side_fa} | امتیاز: {final:.2f} | "
             f"روش‌ها: {'، '.join(bits)} | TFها: {breakdown_str} | "
-            f"روند ۴س/۱روز: {htf_str} | ATR={atr_val:.6f}"
+            f"روند ۴س/۱روز: {htf_str} | {lev_rec} | ATR={atr_val:.6f}"
         )

@@ -117,13 +117,13 @@ strategies:
     weight: 1.0
 
   liquidity_grab:
-    enabled: false
+    enabled: true
     swing_lookback: 50
     wick_pierce_pct: 0.2
     weight: 1.0
 
   momentum_ignition:
-    enabled: false
+    enabled: true
     first_body_min_pct: 4.0
     confirm_body_min_pct: 2.0
     weight: 1.0
@@ -214,8 +214,8 @@ strategies:
     enabled: true
     weight: 1.2
 
-# امتیاز حداقل برای فیوچرز ساعتی — بالا برای وین ریت بهتر
-min_signal_score: 0.68
+# امتیاز حداقل برای فیوچرز ساعتی — متعادل برای وین ریت و تعداد سیگنال بالا
+min_signal_score: 0.55
 
 # ------------------------------------------------------------
 # Risk management
@@ -364,16 +364,18 @@ scalping:
   sl_atr_mult: 0.8
   tp_atr_mult: 1.5
   atr_length: 7
+  # فاصله ارزیابی هر ۴۵ ثانیه
+  evaluation_interval_seconds: 45
   # cooldown کوتاه برای اسکلپ
   signal_cooldown_seconds: 180   # 3 دقیقه
   # ریسک کوچک در اسکلپ
   risk_per_trade_pct: 0.5
   # پوزیشن‌های همزمان
   max_open_positions: 6
-  # حداقل استراتژی‌های مختلف برای سیگنال
-  min_unique_strategies: 2
-  # فیلتر حجم
-  min_volume_ratio: 1.2
+  # حداقل ۱ استراتژی مختلف برای سیگنال (آسان‌تر)
+  min_unique_strategies: 1
+  # فیلتر حجم خاموش
+  min_volume_ratio: 0.8
   # HTF filter خاموش — برای هر دو جهت سیگنال بده
   use_htf_trend_filter: false
   htf_timeframes:

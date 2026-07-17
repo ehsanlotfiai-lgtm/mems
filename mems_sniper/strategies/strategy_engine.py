@@ -121,15 +121,15 @@ class ConfluenceEngine:
             return None
 
         # ──── Confirmation Gate 1: Minimum hit count ────
-        # At least 3 different strategies must fire to avoid noise
+        # At least 2 different strategies must fire to avoid noise
         unique_strategies = len(set(h.name for h in all_hits))
-        if unique_strategies < 3:
+        if unique_strategies < 2:
             return None
 
         # ──── Confirmation Gate 2: Multi-TF agreement ────
-        # At least 2 timeframes must agree on direction
+        # Prefer 2 TFs but allow single-TF if strategy confluence is strong
         tfs_with_hits = set(h.timeframe for h in all_hits)
-        if len(tfs_with_hits) < 2:
+        if len(tfs_with_hits) < 2 and unique_strategies < 3:
             return None
 
         # ──── Confirmation Gate 3: Higher-TF trend alignment ────
@@ -279,8 +279,6 @@ class ConfluenceEngine:
             tp3=float(tp3),
         )
         return signal
-
-    # ---------------------------------------------------- helpers
     @staticmethod
     def _explain(hits, final, breakdown, side, atr_val, trigger_tf=None) -> str:
         top = sorted(hits, key=lambda h: h.score * h.weight, reverse=True)[:3]
@@ -293,6 +291,14 @@ class ConfluenceEngine:
             "rsi_divergence": "واگرایی RSI",
             "bb_breakout": "شکست بولینگر",
             "funding_oi_spike": "اسپایک funding/OI",
+            "ema_cross": "تقاطع EMA",
+            "adx_trend": "روند ADX",
+            "squeeze_momentum": "Squeeze",
+            "macd_crossover": "MACD",
+            "stoch_rsi": "Stochastic RSI",
+            "sr_bounce": "S/R",
+            "volume_trend": "روند حجم",
+            "news_sentiment": "سنتیمنت اخبار",
         }
         bits = []
         for h in top:
@@ -301,11 +307,19 @@ class ConfluenceEngine:
         breakdown_str = "، ".join(f"{tf}: {v:.2f}" for tf, v in breakdown.items() if v > 0)
         side_fa = "خرید (LONG)" if side == Side.LONG else "فروش (SHORT)"
         trigger_note = f" تایم‌فریم مبنا: {trigger_tf}." if trigger_tf else ""
+        # Recommend leverage based on score
+        if final >= 0.75:
+            leverage_rec = "اهرم پیشنهادی: 5x-10x"
+        elif final >= 0.60:
+            leverage_rec = "اهرم پیشنهادی: 3x-5x"
+        else:
+            leverage_rec = "اهرم پیشنهادی: 2x-3x"
         return (
-            f"سیگنال {side_fa} با امتیاز کلی {final:.2f}. "
-            f"روش‌های فعال: {'، '.join(bits)}. "
-            f"توسط تایم‌فریم‌ها: {breakdown_str}."
+            f"⚡ سیگنال فیوچرز {side_fa} با امتیاز {final:.2f}. "
+            f"روش‌ها: {'، '.join(bits)}. "
+            f"TFها: {breakdown_str}."
             f"{trigger_note} "
+            f"{leverage_rec}. "
             f"ATR={atr_val:.6f}."
         )
 

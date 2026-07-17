@@ -1077,7 +1077,7 @@ class RugpullDetector:
                 continue
 
             hits.append(HunterHit(
-                strategy="contract_safety",
+                strategy="rugpull_detector",
                 token_key=f"{t.chain}:{t.address}",
                 token=t,
                 score=score,
@@ -1460,7 +1460,7 @@ class VolumeProfileSniper:
     def __init__(self, config: HunterConfig) -> None:
         self.cfg = config
 
-def evaluate(self, tokens: List[DEXToken]) -> List[HunterHit]:
+    def evaluate(self, tokens: List[DEXToken]) -> List[HunterHit]:
         hits: List[HunterHit] = []
 
         for t in tokens:

@@ -595,36 +595,56 @@ class ForwardEngine:
         include_spot = bool(scalp_cfg.get("include_spot", True))
         include_futures = bool(scalp_cfg.get("include_futures", True))
 
+        # Wait for exchange to be ready
+        await asyncio.sleep(15)
+
         while not self.stop_event.is_set():
             try:
                 em = self.em
                 if not em.clients:
-                    await asyncio.sleep(10)
-                    continue
+                    try:
+                        await em.start()
+                    except Exception as exc:
+                        logger.warning(f"Scalp: exchange start failed: {exc}")
+                        await asyncio.sleep(30)
+                        continue
 
                 # Collect both spot and futures top-volume symbols
                 all_symbols: List[SymbolInfo] = []
                 seen_syms: Set[str] = set()
 
                 if include_futures:
-                    fut_symbols = await self._get_top_volume_symbols("binance", top_n, futures=True)
-                    for s in fut_symbols:
-                        if s.symbol not in seen_syms:
-                            all_symbols.append(s)
-                            seen_syms.add(s.symbol)
+                    try:
+                        fut_symbols = await self._get_top_volume_symbols("binance", top_n, futures=True)
+                        for s in fut_symbols:
+                            if s.symbol not in seen_syms:
+                                all_symbols.append(s)
+                                seen_syms.add(s.symbol)
+                    except Exception as exc:
+                        logger.warning(f"Scalp: futures symbols fetch failed: {exc}")
 
                 if include_spot:
-                    spot_symbols = await self._get_top_volume_symbols("binance", top_n, futures=False)
-                    for s in spot_symbols:
-                        if s.symbol not in seen_syms:
-                            all_symbols.append(s)
-                            seen_syms.add(s.symbol)
+                    try:
+                        spot_symbols = await self._get_top_volume_symbols("binance", top_n, futures=False)
+                        for s in spot_symbols:
+                            if s.symbol not in seen_syms:
+                                all_symbols.append(s)
+                                seen_syms.add(s.symbol)
+                    except Exception as exc:
+                        logger.warning(f"Scalp: spot symbols fetch failed: {exc}")
+
+                if not all_symbols:
+                    logger.warning("Scalp: no symbols found — retrying in 30s")
+                    await asyncio.sleep(30)
+                    continue
 
                 logger.info(f"Scalp loop: evaluating {len(all_symbols)} symbols (spot+futures)")
 
                 scalp_evaluated = 0
                 scalp_signals = 0
                 for info in all_symbols:
+                    if self.stop_event.is_set():
+                        break
                     now = time.time()
                     if now - self._scalp_cooldowns.get(info.symbol, 0) < cooldown:
                         continue
@@ -694,10 +714,12 @@ class ForwardEngine:
     ) -> List[SymbolInfo]:
         """Get top N USDT symbols by 24h volume.
         futures=True  → only symbols with perpetual futures (leverage)
-        futures=False → spot-only symbols (no futures required)
+        futures=False → spot symbols that do NOT have futures (complementary set)
         """
         from core.exchange import SymbolInfo
         try:
+            if exchange not in self.em.clients:
+                await self.em.start()
             if exchange not in self.em.clients:
                 return []
             client = self.em.clients[exchange]
@@ -706,6 +728,10 @@ class ForwardEngine:
             usdt_pairs = []
             for sym, ticker in tickers.items():
                 if not sym.endswith("/USDT"):
+                    continue
+                # Skip stablecoins and low-quality pairs
+                base = sym.split("/")[0]
+                if base in ("USDT", "USDC", "BUSD", "DAI", "TUSD", "FDUSD"):
                     continue
                 has_fut = sym in futures_set
                 if futures and not has_fut:
@@ -716,18 +742,18 @@ class ForwardEngine:
                 vol = ticker.get("quoteVolume", 0) or 0
                 if vol <= 0:
                     continue
-                usdt_pairs.append((sym, vol))
+                usdt_pairs.append((sym, vol, has_fut))
             usdt_pairs.sort(key=lambda x: x[1], reverse=True)
             result = []
-            for sym, vol in usdt_pairs[:limit]:
+            for sym, vol, has_fut in usdt_pairs[:limit]:
                 base = sym.split("/")[0]
                 result.append(SymbolInfo(
                     symbol=sym, base=base, quote="USDT",
-                    listed_at=None, has_futures=futures,
+                    listed_at=None, has_futures=has_fut,
                 ))
             return result
         except Exception as exc:
-            logger.debug(f"top volume fetch error (futures={futures}): {exc}")
+            logger.warning(f"top volume fetch error (futures={futures}): {exc}")
             return []
 
     # ---------------------------------------------------- dashboard plumbing
