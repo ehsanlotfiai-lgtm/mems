@@ -1450,6 +1450,10 @@ function setScalpFilter(f) {
   scalpFilter = f;
   document.querySelectorAll('.scalp-filter-btn').forEach(b => b.classList.toggle('active', b.dataset.filter === f));
   renderScalpSignals();
+  // Re-render history with same filter
+  if (window._allScalpSignals) {
+    renderScalpHistory(window._allScalpSignals);
+  }
 }
 
 function renderScalpSignalCard(s) {
@@ -1530,27 +1534,45 @@ function renderScalpSignals() {
   let filtered = scalpCache;
   // Status filter
   if (scalpFilter === 'open' || scalpFilter === 'tp' || scalpFilter === 'sl') {
-    filtered = filtered.filter(s => (s.status || 'open') === scalpFilter);
+    filtered = filtered.filter(s => {
+      const st = s.status || 'open';
+      if (scalpFilter === 'tp') return st === 'tp' || st === 'tp1' || st === 'tp2' || st === 'tp3';
+      if (scalpFilter === 'sl') return st === 'sl' || st === 'sl_risk_free';
+      return st === scalpFilter;
+    });
   }
-  // Setup filter
+  // Setup filter — check BOTH rationale AND hits
   if (scalpFilter.startsWith('setup_')) {
     const setupKey = 'scalp_' + scalpFilter.replace('setup_', '');
     filtered = filtered.filter(s => {
       const rat = s.rationale || '';
-      return rat.includes(setupKey);
+      const hitNames = (s.hits || []).map(h => h.name || '');
+      return rat.includes(setupKey) || hitNames.includes(setupKey);
     });
   }
-  box.innerHTML = filtered.map(renderScalpSignalCard).join('') || '<p style="color:#8e95ac">سیگنال اسکلپی ثبت نشده.</p>';
+  box.innerHTML = filtered.map(renderScalpSignalCard).join('') || '<p style="color:#8e95ac">سیگنالی با این فیلتر پیدا نشد.</p>';
   $('#scalp_count').textContent = scalpCache.length;
 }
 
 function renderScalpHistory(signals) {
   const tb = $('#scalp_history');
   if (!tb) return;
-  const statusFa = { open: '🟢 فعال', tp: '✅ سود', sl: '❌ ضرر', trailing: '🔄 تریلینگ', closed: '⏰ بسته' };
-  tb.innerHTML = signals.slice(0, 50).map(s => {
+  const statusFa = { open: '🟢 فعال', tp: '✅ سود', tp1: '✅ TP1', tp2: '✅ TP2', sl: '❌ ضرر', sl_risk_free: '🛡️ ریسک‌فری', trailing: '🔄 تریلینگ', closed: '⏰ بسته', timeout: '⏰ تایم‌اوت' };
+
+  // Apply setup filter to history too
+  let filtered = signals;
+  if (scalpFilter.startsWith('setup_')) {
+    const setupKey = 'scalp_' + scalpFilter.replace('setup_', '');
+    filtered = signals.filter(s => {
+      const rat = s.rationale || '';
+      const hitNames = (s.hits || []).map(h => h.name || '');
+      return rat.includes(setupKey) || hitNames.includes(setupKey);
+    });
+  }
+  tb.innerHTML = filtered.slice(0, 50).map(s => {
     const curPrice = livePrices[s.symbol] ? fmtPrice(livePrices[s.symbol]) : '...';
     const curColor = livePrices[s.symbol] ? (livePrices[s.symbol] > s.entry ? (s.side === 'long' ? 'var(--success)' : 'var(--danger)') : (s.side === 'long' ? 'var(--danger)' : 'var(--success)')) : '';
+    const st = s.status || 'open';
     return `
     <tr>
       <td>${fmtTime(s.created_at)}</td><td>${s.exchange}</td>
@@ -1559,7 +1581,7 @@ function renderScalpHistory(signals) {
       <td>${s.score.toFixed(2)}</td>
       <td>${fmtPrice(s.entry)}</td><td>${fmtPrice(s.take_profit)}</td><td>${fmtPrice(s.stop_loss)}</td>
       <td style="color:${curColor};font-weight:bold">${curPrice}</td>
-      <td><span class="sig-badge-inline status-${s.status || 'open'}">${statusFa[s.status || 'open'] || s.status}</span></td>
+      <td><span class="sig-badge-inline status-${st}">${statusFa[st] || st}</span></td>
       <td>${[...new Set(s.hits.map(h => h.name))].join(', ')}</td>
     </tr>`;
   }).join('');
@@ -1680,7 +1702,8 @@ function renderScalpStats(data) {
 
 async function loadScalping() {
   try {
-    const { signals } = await json('/api/scalping/signals?limit=100');
+    const { signals } = await json('/api/scalping/signals?limit=200');
+    window._allScalpSignals = signals;  // Store all for filtering
     scalpCache = signals.slice(0, 30);
     renderScalpSignals();
     renderScalpHistory(signals);
