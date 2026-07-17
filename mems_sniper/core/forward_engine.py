@@ -788,29 +788,47 @@ class ForwardEngine:
             if exchange not in self.em.clients:
                 return []
             client = self.em.clients[exchange]
+
+            # Get futures symbols set (spot-format: "BTC/USDT")
             futures_set = self.em.get_futures_symbols(exchange)
+
+            # Fetch tickers — may return futures format (BTC/USDT:USDT) or spot format
             tickers = await client.fetch_tickers()
             usdt_pairs = []
             for sym, ticker in tickers.items():
-                if not sym.endswith("/USDT"):
+                # Normalize symbol: accept both "BTC/USDT" and "BTC/USDT:USDT"
+                base = ""
+                if sym.endswith("/USDT"):
+                    base = sym.split("/")[0]
+                elif sym.endswith("/USDT:USDT"):
+                    # Futures format — convert to spot format for consistency
+                    base = sym.split("/")[0]
+                    sym = f"{base}/USDT"
+                else:
                     continue
-                # Skip stablecoins and low-quality pairs
-                base = sym.split("/")[0]
+
+                # Skip stablecoins
                 if base in ("USDT", "USDC", "BUSD", "DAI", "TUSD", "FDUSD"):
                     continue
-                has_fut = sym in futures_set
+
+                has_fut = sym in futures_set or f"{base}/USDT" in futures_set
                 if futures and not has_fut:
                     continue
                 if not futures and has_fut:
-                    # spot-only: skip symbols already included via futures list
                     continue
+
                 vol = ticker.get("quoteVolume", 0) or 0
                 if vol <= 0:
                     continue
                 usdt_pairs.append((sym, vol, has_fut))
+
             usdt_pairs.sort(key=lambda x: x[1], reverse=True)
             result = []
+            seen = set()
             for sym, vol, has_fut in usdt_pairs[:limit]:
+                if sym in seen:
+                    continue
+                seen.add(sym)
                 base = sym.split("/")[0]
                 result.append(SymbolInfo(
                     symbol=sym, base=base, quote="USDT",
@@ -921,6 +939,8 @@ class ForwardEngine:
                             signals.append(signal)
                             self._lit_cooldowns[sym] = time.time()
                             logger.info(f"LIT candidate: {sym} score={signal.score:.2f} setup={signal.strategy}")
+                        elif signal:
+                            logger.debug(f"LIT {sym}: score {signal.score:.2f} below min {min_score}")
                     except Exception as e:
                         logger.warning(f"LIT loop error {sym}: {e}")
                     await asyncio.sleep(0.2)

@@ -96,10 +96,10 @@ class LITEngine:
 
         # Layer 1: Structure
         self.structure_engine = StructureEngine(
-            left_bars=int(cfg.get("swing_left_bars", 5)),
-            right_bars=int(cfg.get("swing_right_bars", 5)),
-            min_displacement_atr=float(cfg.get("min_displacement_atr", 1.2)),
-            min_body_ratio=float(cfg.get("min_body_ratio", 0.6)),
+            left_bars=int(cfg.get("swing_left_bars", 3)),
+            right_bars=int(cfg.get("swing_right_bars", 3)),
+            min_displacement_atr=float(cfg.get("min_displacement_atr", 1.0)),
+            min_body_ratio=float(cfg.get("min_body_ratio", 0.5)),
         )
 
         # Layer 2: Liquidity

@@ -234,10 +234,10 @@ class SetupDetector:
         cfg = config or {}
         self.fvg_detector = FVGDetector(min_gap_pct=float(cfg.get("min_fvg_pct", 0.03)))
         self.ob_detector = OBDetector(min_displacement_ratio=float(cfg.get("min_ob_displacement", 1.5)))
-        self.require_fvg = bool(cfg.get("require_fvg", True))
+        self.require_fvg = bool(cfg.get("require_fvg", False))  # Don't require FVG (allow OB-only)
         self.require_ob_confluence = bool(cfg.get("require_ob_confluence", False))
-        self.conservative_requires_bos = bool(cfg.get("conservative_requires_bos", True))
-        self.max_age_bars = int(cfg.get("max_age_bars_after_sweep", 15))
+        self.conservative_requires_bos = bool(cfg.get("conservative_requires_bos", False))
+        self.max_age_bars = int(cfg.get("max_age_bars_after_sweep", 20))
         self.signal_mode = cfg.get("signal_mode", "aggressive")
 
     def detect(
