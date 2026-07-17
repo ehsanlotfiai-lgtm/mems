@@ -1057,6 +1057,8 @@ def create_app(
 
         @app.get("/api/lit/analyze/{symbol:path}")
         async def api_lit_analyze(symbol: str, timeframe: str = "15m") -> dict:
+            """Analyze symbol and return full LIT data for chart display.
+            Always returns structure/liquidity/FVG data even if no signal fires."""
             if "-" in symbol and "/" not in symbol:
                 p = symbol.split("-")
                 if len(p) == 2:
@@ -1066,13 +1068,85 @@ def create_app(
                 ohlcv = await em.fetch_ohlcv("binance", symbol, timeframe, limit=200)
                 if not ohlcv:
                     return {"error": "No data"}
+
+                import numpy as np
+                opens = np.array([c.open for c in ohlcv], dtype=float)
+                highs = np.array([c.high for c in ohlcv], dtype=float)
+                lows = np.array([c.low for c in ohlcv], dtype=float)
+                closes = np.array([c.close for c in ohlcv], dtype=float)
+                timestamps = np.array([c.timestamp for c in ohlcv], dtype=float)
+
+                # Try full LIT signal first
                 df = _to_df(ohlcv)
-                signal = _lit_engine.analyze(df, symbol, "binance", None)
+                # Fetch HTF data for better bias
+                htf_ohlcv = await em.fetch_ohlcv("binance", symbol, "1h", limit=100)
+                htf_df = _to_df(htf_ohlcv) if htf_ohlcv else None
+
+                signal = _lit_engine.analyze(df, symbol, "binance", htf_df)
                 if signal:
                     return signal.to_dict()
-                return {"message": "No LIT signal found"}
+
+                # Even without a signal, return market structure data for chart
+                from strategies.lit_structure import StructureEngine
+                from strategies.lit_liquidity import LiquidityEngine
+                from strategies.lit_patterns import FVGDetector, OBDetector
+
+                se = StructureEngine(left_bars=3, right_bars=3, min_displacement_atr=1.0, min_body_ratio=0.5)
+                structure = se.analyze(opens, highs, lows, closes, timestamps)
+                atr = se._calc_atr(highs, lows, closes, 14)
+                current_price = float(closes[-1])
+
+                le = LiquidityEngine()
+                liq_map = le.analyze(opens, highs, lows, closes, structure, atr, current_price, timeframe, timestamps)
+
+                fd = FVGDetector()
+                fvgs = fd.find_fvgs(opens, highs, lows, closes, timestamps)
+
+                od = OBDetector()
+                obs = od.find_order_blocks(opens, highs, lows, closes, timestamps)
+
+                # Build response with analysis data (no trade signal)
+                return {
+                    "message": "No trade signal — showing market analysis",
+                    "bias": structure.trend.value,
+                    "structure_data": {
+                        "trend": structure.trend.value,
+                        "swing_highs": len(structure.swing_highs),
+                        "swing_lows": len(structure.swing_lows),
+                        "events": len(structure.events),
+                        "displacements": len(structure.displacements),
+                    },
+                    "liquidity_levels": [
+                        {"price": p.price, "side": p.side.value, "kind": p.kind.value, "strength": p.strength}
+                        for p in (liq_map.buy_side_pools[:5] + liq_map.sell_side_pools[:5])
+                    ],
+                    "fvg_zones": [
+                        {"top": f.top, "bottom": f.bottom, "direction": f.direction}
+                        for f in fvgs[-5:]
+                    ],
+                    "order_blocks": [
+                        {"top": ob.top, "bottom": ob.bottom, "direction": ob.direction}
+                        for ob in obs[-5:]
+                    ],
+                    "chart_annotations": [
+                        {"type": "line", "tag": p.side.value, "price": p.price,
+                         "text": f"{p.kind.value} (x{p.strength})",
+                         "color": "#ef4444" if p.side.value == "buy_side" else "#22c55e"}
+                        for p in (liq_map.buy_side_pools[:3] + liq_map.sell_side_pools[:3])
+                    ],
+                    "reasons": [
+                        f"ساختار: {structure.trend.value}",
+                        f"نقدینگی خرید: {len(liq_map.buy_side_pools)} سطح",
+                        f"نقدینگی فروش: {len(liq_map.sell_side_pools)} سطح",
+                        f"FVG: {len(fvgs)} شکاف",
+                        f"OB: {len(obs)} بلاک",
+                        f"Sweep: {len(liq_map.sweeps)} جاروب",
+                    ],
+                    "atr": round(atr, 8),
+                }
             except Exception as exc:
-                return {"error": str(exc)}
+                import traceback
+                return {"error": str(exc), "traceback": traceback.format_exc()}
 
         logger.info("LIT API endpoints registered")
     except Exception as _lit_err:

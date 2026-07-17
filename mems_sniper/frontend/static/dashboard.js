@@ -2107,15 +2107,112 @@ async function showLitSignalOnChart(signalId) {
     if (sig.tp2) litLiveCandleSeries.createPriceLine({ price: sig.tp2, color: '#a855f7', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'TP2' });
     litLiveCandleSeries.createPriceLine({ price: sig.stop_loss, color: '#ef4444', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'SL' });
 
-    // Marker at signal time
+    // ─── Draw LIT Annotations (FVG, OB, Liquidity, CHoCH/BOS, Displacement) ───
+    try {
+      const annResp = await fetch(`/api/lit/analyze/${sig.symbol.replace('/', '-')}?timeframe=${tf}`);
+      const annData = await annResp.json();
+      const annotations = annData.chart_annotations || annData.zones || [];
+      
+      // Draw annotation lines and boxes on the chart
+      annotations.forEach(ann => {
+        if (!ann || !ann.price) return;
+        
+        if (ann.type === 'line' && ann.price > 0) {
+          // Draw as price line
+          const colors = {
+            'buy_side_liq': '#ef4444', 'sell_side_liq': '#22c55e',
+            'entry': '#58a6ff', 'sl': '#ef4444', 'tp1': '#22c55e',
+            'tp2': '#059669', 'tp3': '#047857', 'invalidation': '#dc2626',
+            'liquidity_target': '#6366f1', 'sweep': '#f59e0b',
+          };
+          const lineColor = ann.color || colors[ann.tag] || '#6b7280';
+          const lineStyle = ann.style === 'dashed' ? 2 : ann.style === 'dotted' ? 3 : 0;
+          litLiveCandleSeries.createPriceLine({
+            price: ann.price, color: lineColor, lineWidth: 1,
+            lineStyle: lineStyle, axisLabelVisible: false,
+            title: ann.text || ann.tag || '',
+          });
+        }
+      });
+
+      // Draw FVG zones as colored bands (using markers for visibility)
+      const fvgZones = annData.fvg_zones || sig.fvg_zones || [];
+      fvgZones.forEach(fvg => {
+        if (fvg.top && fvg.bottom) {
+          const fvgColor = fvg.direction === 'bullish' ? '#8b5cf620' : '#ec489920';
+          // Draw FVG top and bottom as price lines
+          litLiveCandleSeries.createPriceLine({
+            price: fvg.top, color: fvg.direction === 'bullish' ? '#8b5cf6' : '#ec4899',
+            lineWidth: 1, lineStyle: 2, axisLabelVisible: false,
+            title: `FVG ${fvg.direction === 'bullish' ? '↑' : '↓'}`,
+          });
+          litLiveCandleSeries.createPriceLine({
+            price: fvg.bottom, color: fvg.direction === 'bullish' ? '#8b5cf6' : '#ec4899',
+            lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: '',
+          });
+        }
+      });
+
+      // Draw Order Blocks
+      const obZones = annData.order_blocks || sig.order_blocks || [];
+      obZones.forEach(ob => {
+        if (ob.top && ob.bottom) {
+          litLiveCandleSeries.createPriceLine({
+            price: ob.top, color: ob.direction === 'bullish' ? '#06b6d4' : '#f97316',
+            lineWidth: 1, lineStyle: 1, axisLabelVisible: false,
+            title: `OB ${ob.direction === 'bullish' ? '↑' : '↓'}`,
+          });
+          litLiveCandleSeries.createPriceLine({
+            price: ob.bottom, color: ob.direction === 'bullish' ? '#06b6d4' : '#f97316',
+            lineWidth: 1, lineStyle: 1, axisLabelVisible: false, title: '',
+          });
+        }
+      });
+
+      // Draw liquidity levels from analysis
+      const liqLevels = annData.liquidity_levels || sig.liquidity_levels || [];
+      liqLevels.forEach(liq => {
+        if (liq.price > 0) {
+          const liqColor = liq.side === 'buy_side' ? '#ef4444' : '#22c55e';
+          litLiveCandleSeries.createPriceLine({
+            price: liq.price, color: liqColor, lineWidth: 1, lineStyle: 3,
+            axisLabelVisible: false,
+            title: `${liq.side === 'buy_side' ? 'BSL' : 'SSL'} ${liq.kind || ''}`,
+          });
+        }
+      });
+
+    } catch(annErr) { console.debug('LIT annotations:', annErr); }
+
+    // Marker at signal time + structural markers (CHoCH, BOS, Sweep)
     const sigTime = Math.floor(sig.created_at);
     const markers = [{
       time: sigTime, position: sig.side === 'long' ? 'belowBar' : 'aboveBar',
       color: sig.side === 'long' ? '#22c55e' : '#ef4444',
       shape: sig.side === 'long' ? 'arrowUp' : 'arrowDown',
-      text: `${sig.side === 'long' ? 'لانگ' : 'شورت'}`,
+      text: `${sig.side === 'long' ? '🟢 LONG' : '🔴 SHORT'} (${sig.score?.toFixed(2) || ''})`,
     }];
-    try { litLiveCandleSeries.setMarkers(markers); } catch(e) {}
+    
+    // Add structural markers from annotations data
+    try {
+      const annResp2 = await fetch(`/api/lit/analyze/${sig.symbol.replace('/', '-')}?timeframe=${tf}`);
+      const annData2 = await annResp2.json();
+      const structure = annData2.structure_data || {};
+      const reasons = annData2.reasons || sig.reasons || [];
+      
+      // If we have CHOCH/BOS info, add marker
+      if (structure.choch && structure.choch.index) {
+        // Approximate time from index
+        const approxTime = sigTime - (200 - structure.choch.index) * (tf === '15m' ? 900 : 300);
+        markers.push({
+          time: Math.floor(approxTime / 1000) || sigTime - 3600,
+          position: 'aboveBar', color: '#a855f7', shape: 'circle',
+          text: structure.choch.kind?.includes('bullish') ? '↑ CHoCH' : '↓ CHoCH',
+        });
+      }
+    } catch(e) {}
+    
+    try { litLiveCandleSeries.setMarkers(markers.sort((a,b) => a.time - b.time)); } catch(e) {}
 
     // Zoom to signal area
     const tfSeconds = { '1m':60, '5m':300, '15m':900, '1h':3600, '4h':14400, '1d':86400 };
