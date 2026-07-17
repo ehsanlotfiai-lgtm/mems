@@ -1564,7 +1564,7 @@ function renderScalpWinRates(wr) {
     const pnlVal = d.avg_pnl_pct || 0;
     const pnlColor = pnlVal >= 0 ? 'var(--success)' : 'var(--danger)';
     const detail = d.total > 0
-      ? `${d.wins} برد / ${d.losses} باخت از ${d.total} ترید`
+      ? `${d.wins} برد / ${d.losses} باخت${d.risk_free ? ' / ' + d.risk_free + ' 🛡️ ریسک‌فری' : ''} از ${d.total} ترید`
       : 'هنوز تریدی ثبت نشده';
     return `
       <div class="pos-winrate-card">

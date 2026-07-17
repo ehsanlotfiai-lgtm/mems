@@ -203,7 +203,7 @@ class Storage:
                 size_usdt, stop_loss, take_profit, pnl_usdt, pnl_pct, close_reason, status,
                 signal_id, leverage, market_type, fee_usdt, slippage_usdt,
                 tp2, tp3, tp1_hit, risk_free, unrealized_pnl_pct)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (pos.id, pos.opened_at, pos.closed_at, pos.exchange, pos.symbol, pos.side.value,
              pos.entry, pos.exit_price, pos.qty, pos.size_usdt, pos.stop_loss,
              pos.take_profit, pos.pnl_usdt, pos.pnl_pct, pos.close_reason, pos.status,
@@ -366,6 +366,7 @@ class Storage:
             closed_rows = [(p, pnl, r, o) for p, pnl, r, o in rows if p is not None]
             wins = sum(1 for p, _, _, _ in closed_rows if p > 0)
             losses = sum(1 for p, _, _, _ in closed_rows if p < 0)
+            risk_free = sum(1 for _, _, r, _ in closed_rows if r and 'risk_free' in str(r))
             open_count = sum(1 for p, _, _, _ in rows if p is None)
             total = len(closed_rows)
             total_pnl_pct = sum(p for p, _, _, _ in closed_rows)
@@ -378,6 +379,7 @@ class Storage:
                 "open": open_count,
                 "wins": wins,
                 "losses": losses,
+                "risk_free": risk_free,
                 "win_rate": round(win_rate, 1),
                 "avg_pnl_pct": round(avg_pnl, 2),
                 "total_pnl_usdt": round(total_pnl_usdt, 2),
