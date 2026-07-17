@@ -199,7 +199,7 @@ class ScalpingEngine:
             return None
 
         entry = float(prices.iloc[-1])
-        # Multi-TP levels for scalping
+        # Multi-TP levels for scalping — default ATR-based
         tp1_mult = self.tp_atr_mult * 0.5   # TP1 = half of TP distance (risk-free)
         tp2_mult = self.tp_atr_mult * 0.8   # TP2 = 80% of TP distance (partial close)
         tp3_mult = self.tp_atr_mult         # TP3 = full TP distance (full close)
@@ -215,6 +215,43 @@ class ScalpingEngine:
             tp2 = entry - tp2_mult * atr_val
             tp3 = entry - tp3_mult * atr_val
             tp = tp1  # take_profit field = TP1
+
+        # ── Structural SL/TP override for PRO BTB and SP2L ──
+        # These strategies compute their own SL (behind the spike / Wave A)
+        # and TP (R:R based) directly from market structure. Use those
+        # instead of the generic ATR-based levels, since a structural stop
+        # is far more meaningful than an arbitrary ATR multiple — and this
+        # guarantees SL/entry/TP are always on the logically correct side.
+        side_hits = [h for h in all_hits if h.detail.get("side") == ("long" if side == Side.LONG else "short")]
+        btb_hit = next((h for h in side_hits if h.name == "scalp_pro_btb"), None)
+        sp2l_hit = next((h for h in side_hits if h.name == "scalp_sp2l"), None)
+
+        def _valid_long(sl_v, tp_v):
+            return sl_v < entry < tp_v
+
+        def _valid_short(sl_v, tp_v):
+            return tp_v < entry < sl_v
+
+        if btb_hit is not None and "sl" in btb_hit.detail and "tp" in btb_hit.detail:
+            d_sl, d_tp = float(btb_hit.detail["sl"]), float(btb_hit.detail["tp"])
+            ok = _valid_long(d_sl, d_tp) if side == Side.LONG else _valid_short(d_sl, d_tp)
+            if ok:
+                sl = d_sl
+                tp1 = tp = d_tp
+                risk = abs(entry - sl)
+                tp2 = entry + risk * (3.0 if side == Side.LONG else -3.0)
+                tp3 = entry + risk * (4.0 if side == Side.LONG else -4.0)
+        elif sp2l_hit is not None and "sl" in sp2l_hit.detail and "tp1" in sp2l_hit.detail:
+            d_sl = float(sp2l_hit.detail["sl"])
+            d_tp1 = float(sp2l_hit.detail["tp1"])
+            d_tp2 = float(sp2l_hit.detail.get("tp2", d_tp1))
+            ok = _valid_long(d_sl, d_tp1) if side == Side.LONG else _valid_short(d_sl, d_tp1)
+            if ok:
+                sl = d_sl
+                tp1 = tp = d_tp1
+                tp2 = d_tp2
+                risk = abs(entry - sl)
+                tp3 = entry + risk * (3.0 if side == Side.LONG else -3.0)
 
         risk_pct = float(self.s.risk.get("risk_per_trade_pct", 1.0)) / 100.0
         size_usdt = float(self.s.risk.get("initial_paper_balance", 10000)) * risk_pct
