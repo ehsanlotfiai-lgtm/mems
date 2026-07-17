@@ -653,11 +653,15 @@ def create_app(
         signals = await s.recent_scalp_signals(200)
         total = len(signals)
         active = sum(1 for sig in signals if sig.get("status") == "open")
-        tp = sum(1 for sig in signals if sig.get("status") == "tp")
-        sl = sum(1 for sig in signals if sig.get("status") == "sl")
+        tp = sum(1 for sig in signals if sig.get("status", "") in ("tp", "tp1", "tp2", "tp3"))
+        sl = sum(1 for sig in signals if sig.get("status", "") in ("sl", "sl_risk_free"))
 
         # Per-setup stats from paper_trades
-        setup_stats = {}
+        setup_stats = {
+            "micromap": {"total": 0, "wins": 0, "losses": 0, "pnl_sum": 0.0, "trades": [], "win_rate": 0, "avg_pnl": 0},
+            "pro_btb": {"total": 0, "wins": 0, "losses": 0, "pnl_sum": 0.0, "trades": [], "win_rate": 0, "avg_pnl": 0},
+            "sp2l": {"total": 0, "wins": 0, "losses": 0, "pnl_sum": 0.0, "trades": [], "win_rate": 0, "avg_pnl": 0},
+        }
         try:
             cur = await s.db.execute(
                 """SELECT signal_id, pnl_pct, pnl_usdt, close_reason
