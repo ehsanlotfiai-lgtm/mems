@@ -496,7 +496,7 @@ lit:
   tp2_atr_mult: 3.0           # fallback TP2 (legacy compat)
 
   # ── Score Engine (Layer 5) ──
-  min_score: 0.60             # minimum overall score to emit signal
+  min_score: 0.50             # minimum overall score to emit signal (lowered for more signals)
   scoring:
     w_htf: 0.25               # weight: HTF alignment
     w_sweep: 0.25             # weight: sweep quality

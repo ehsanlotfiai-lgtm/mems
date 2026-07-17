@@ -160,7 +160,7 @@ class LITEngine:
         self.score_engine = LITScoreEngine(cfg.get("scoring", {}))
 
         # Config
-        self.min_score = float(cfg.get("min_score", 0.60))
+        self.min_score = float(cfg.get("min_score", 0.50))
 
         logger.info(
             f"LIT Engine v2 initialized: "
@@ -214,10 +214,10 @@ class LITEngine:
         ltf_structure = self.structure_engine.analyze(highs, lows, closes, opens)
 
         # Gate: no entry without HTF bias (except range-expansion)
+        # Relaxed: allow if LTF has clear structure even when HTF is ranging
         if htf_bias == TrendState.RANGING:
-            # Only allow if LTF shows clear structure
-            if ltf_structure.trend == TrendState.RANGING:
-                return None
+            # Allow through — LTF structure will drive Range-to-Expansion setups
+            pass
 
         # ═══ Layer 2: LIQUIDITY ═══
         liq_map = self.liquidity_engine.analyze(

@@ -193,40 +193,74 @@ class DexScreenerClient:
             except Exception as exc:  # noqa: BLE001
                 logger.debug(f"DexScreener trending (profiles) failed: {exc}")
 
-        # Fallback 4: metas/trending/v1 → resolve token addresses
+        # Fallback 4: metas/trending/v1 → get trending categories → search tokens
         if not boosts:
             try:
                 resp = await client.get(f"{DEXSCREENER_BASE}/metas/trending/v1")
                 resp.raise_for_status()
                 metas = resp.json()
-                if metas:
-                    for m in metas[:limit]:
-                        addr = m.get("tokenAddress", "")
-                        chain = m.get("chainId", "")
-                        if addr and chain:
-                            boosts.append({"tokenAddress": addr, "chainId": chain})
-                    logger.debug(f"DexScreener trending: {len(boosts)} from metas/trending")
+                if metas and isinstance(metas, list):
+                    # Metas are categories (AI, MEME, etc.) — search for tokens in these
+                    tokens_from_metas: List[DEXToken] = []
+                    for m in metas[:3]:  # Top 3 trending categories
+                        slug = m.get("slug", "")
+                        if slug:
+                            try:
+                                # Search tokens by category name
+                                search_resp = await client.get(
+                                    f"{DEXSCREENER_BASE}/latest/dex/search",
+                                    params={"q": slug}
+                                )
+                                search_resp.raise_for_status()
+                                search_data = search_resp.json()
+                                pairs = search_data.get("pairs") or []
+                                parsed = self._parse_pairs(pairs[:10])
+                                tokens_from_metas.extend(parsed)
+                            except Exception:
+                                pass
+                        if len(tokens_from_metas) >= limit:
+                            break
+                    if tokens_from_metas:
+                        # Deduplicate
+                        seen_addr: Set[str] = set()
+                        unique = []
+                        for t in tokens_from_metas:
+                            if t.address not in seen_addr:
+                                seen_addr.add(t.address)
+                                unique.append(t)
+                        return unique[:limit]
             except Exception as exc:  # noqa: BLE001
                 logger.debug(f"DexScreener trending (metas) failed: {exc}")
 
-        # Fallback 5: latest pairs on Solana by volume
+        # Fallback 5: search for popular terms to find active tokens
         if not boosts:
             try:
-                resp = await client.get(
-                    f"{DEXSCREENER_BASE}/latest/dex/pairs/solana",
-                    params={"limit": limit}
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                pairs = data.get("pairs") or []
-                tokens: List[DEXToken] = []
-                for p in pairs[:limit]:
-                    parsed = self._parse_pairs([p])
-                    tokens.extend(parsed)
-                if tokens:
-                    return tokens[:limit]
+                search_queries = ["pump", "meme", "sol", "pepe"]
+                fallback_tokens: List[DEXToken] = []
+                for q in search_queries:
+                    resp = await client.get(
+                        f"{DEXSCREENER_BASE}/latest/dex/search",
+                        params={"q": q}
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    pairs = data.get("pairs") or []
+                    # Sort by volume
+                    pairs.sort(key=lambda p: float((p.get("volume") or {}).get("h24", 0) or 0), reverse=True)
+                    parsed = self._parse_pairs(pairs[:10])
+                    fallback_tokens.extend(parsed)
+                    if len(fallback_tokens) >= limit:
+                        break
+                if fallback_tokens:
+                    seen_addr: Set[str] = set()
+                    unique = []
+                    for t in fallback_tokens:
+                        if t.address not in seen_addr:
+                            seen_addr.add(t.address)
+                            unique.append(t)
+                    return unique[:limit]
             except Exception as exc:  # noqa: BLE001
-                logger.debug(f"DexScreener trending (pairs fallback) failed: {exc}")
+                logger.debug(f"DexScreener trending (search fallback) failed: {exc}")
 
         if not boosts:
             return []
@@ -253,15 +287,19 @@ class DexScreenerClient:
         """Fetch full info for a single token by address."""
         client = await self._get_client()
         try:
-            url = f"{DEXSCREENER_BASE}/token/{chain}/{address}" if chain \
-                else f"{DEXSCREENER_BASE}/tokens/{address}"
+            if chain:
+                # Use the new v1 endpoint
+                url = f"{DEXSCREENER_BASE}/token-pairs/v1/{chain}/{address}"
+            else:
+                url = f"{DEXSCREENER_BASE}/tokens/v1/{address}"
             resp = await client.get(url)
             resp.raise_for_status()
             data = resp.json()
         except Exception as exc:  # noqa: BLE001
             logger.debug(f"DexScreener token {chain}:{address} failed: {exc}")
             return None
-        pairs = data.get("pairs") or data.get("pair") or []
+        # v1 endpoint returns array directly, not {pairs: [...]}
+        pairs = data if isinstance(data, list) else (data.get("pairs") or data.get("pair") or [])
         if not pairs:
             return None
         tokens = self._parse_pairs(pairs)
@@ -269,24 +307,38 @@ class DexScreenerClient:
 
     # ---------------------------------------------------- latest pairs on chain
     async def get_latest_pairs(self, chain: str = "solana", limit: int = 50) -> List[DEXToken]:
-        """Get recently created pools on a given chain — for new-listing sniper."""
+        """Get recently created pools on a given chain — for new-listing sniper.
+        
+        Strategy: Use search with popular chain-specific queries to find new tokens,
+        then sort by creation time.
+        """
         client = await self._get_client()
-        try:
-            # DexScreener doesn't have a direct "latest" endpoint, but we can
-            # use the search with the chain name + sort by creation.
-            resp = await client.get(
-                f"{DEXSCREENER_BASE}/latest/dex/pairs/{chain}",
-                params={"limit": limit}
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception as exc:  # noqa: BLE001
-            logger.debug(f"DexScreener latest pairs {chain}: {exc}")
-            return []
-        pairs = data.get("pairs") or []
-        tokens = self._parse_pairs(pairs[:limit])
-        # sort by creation time (newest first)
-        tokens.sort(key=lambda t: t.created_at, reverse=True)
+        all_tokens: List[DEXToken] = []
+
+        # Search with chain-specific queries to discover new tokens
+        queries = ["pump", "new", "sol", "meme"] if chain == "solana" else ["new", "token"]
+        for query in queries:
+            try:
+                resp = await client.get(
+                    f"{DEXSCREENER_BASE}/latest/dex/search",
+                    params={"q": query}
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                pairs = data.get("pairs") or []
+                # Filter by chain
+                chain_pairs = [p for p in pairs if p.get("chainId", "") == chain]
+                tokens = self._parse_pairs(chain_pairs[:limit])
+                for t in tokens:
+                    if not any(existing.address == t.address for existing in all_tokens):
+                        all_tokens.append(t)
+                if len(all_tokens) >= limit:
+                    break
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"DexScreener latest pairs search '{query}' {chain}: {exc}")
+
+        # Sort by creation time (newest first)
+        all_tokens.sort(key=lambda t: t.created_at, reverse=True)
         return tokens
 
     # ---------------------------------------------------- token history (OHLCV)

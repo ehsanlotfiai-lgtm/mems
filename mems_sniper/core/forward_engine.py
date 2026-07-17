@@ -778,22 +778,46 @@ class ForwardEngine:
         lit_cfg = self.s.raw.get("lit", {})
         cooldown_sec = int(lit_cfg.get("cooldown_seconds", 1800))
         eval_interval = int(lit_cfg.get("evaluation_interval_seconds", 300))
-        min_score = float(lit_cfg.get("min_score", 0.70))
+        min_score = float(lit_cfg.get("min_score", 0.55))
         max_open = int(lit_cfg.get("max_open_positions", 3))
-        lit_tfs = lit_cfg.get("timeframes", ["15m", "1h", "4h"])
-        tf_seconds = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
-        wait_time = max(tf_seconds.get(lit_tfs[0], 900), 60)
+        lit_tfs = lit_cfg.get("timeframes", ["5m", "15m", "1h", "4h"])
+        trigger_tf = lit_cfg.get("trigger_timeframe", "15m")
+        htf_tf = lit_cfg.get("htf_timeframe", "1h")
 
-        await asyncio.sleep(wait_time)
+        # Wait for exchange connection
+        await asyncio.sleep(30)
         while not self.stop_event.is_set():
             try:
-                all_symbols = list(self.universes.get("scalp", self.universes.get("default", [])))
+                # FIX: Get symbols from the ACTUAL universe keys (binance/bybit)
+                all_symbols: List[str] = []
+                for ex_name, sym_list in self.universes.items():
+                    for info in sym_list:
+                        if info.symbol not in all_symbols:
+                            all_symbols.append(info.symbol)
+
+                # If universes empty, try fetching top volume directly
+                if not all_symbols:
+                    try:
+                        top_syms = await self._get_top_volume_symbols("binance", 30, futures=True)
+                        all_symbols = [s.symbol for s in top_syms]
+                    except Exception:
+                        pass
+
+                # Add special symbols
                 special = lit_cfg.get("special_symbols", [])
                 for sym in special:
                     if sym not in all_symbols:
                         all_symbols.append(sym)
-                limit = lit_cfg.get("universe_size", 20)
+
+                limit = int(lit_cfg.get("universe_size", 20))
                 lit_symbols = all_symbols[:limit]
+
+                if not lit_symbols:
+                    logger.warning("LIT loop: no symbols in universe — retrying in 60s")
+                    await asyncio.sleep(60)
+                    continue
+
+                logger.info(f"LIT loop: evaluating {len(lit_symbols)} symbols")
 
                 signals: List[LITSignal] = []
                 for sym in lit_symbols:
@@ -803,7 +827,7 @@ class ForwardEngine:
                     if (time.time() - last_time) < cooldown_sec:
                         continue
                     try:
-                        trigger_tf = lit_tfs[0]
+                        # Fetch trigger TF candles
                         try:
                             fresh = await self.em.fetch_ohlcv("binance", sym, trigger_tf, limit=200)
                             for c in fresh:
@@ -814,24 +838,27 @@ class ForwardEngine:
                         if not cached or len(cached) < 30:
                             continue
                         cand_df = pd.DataFrame([{"open": c.open, "high": c.high, "low": c.low, "close": c.close, "volume": c.volume, "timestamp": c.timestamp} for c in cached])
-                        htf = "1h" if trigger_tf in ("1m", "5m", "15m") else "4h"
+
+                        # Fetch HTF candles for bias
                         try:
-                            fresh_htf = await self.em.fetch_ohlcv("binance", sym, htf, limit=100)
+                            fresh_htf = await self.em.fetch_ohlcv("binance", sym, htf_tf, limit=100)
                             for c in fresh_htf:
-                                self.store.push("binance", sym, htf, c)
+                                self.store.push("binance", sym, htf_tf, c)
                         except Exception:
                             pass
-                        cached_htf = self.store.get("binance", sym, htf)
+                        cached_htf = self.store.get("binance", sym, htf_tf)
                         htf_df = None
                         if cached_htf and len(cached_htf) >= 20:
                             htf_df = pd.DataFrame([{"open": c.open, "high": c.high, "low": c.low, "close": c.close, "volume": c.volume, "timestamp": c.timestamp} for c in cached_htf])
+
                         signal = self.lit_engine.analyze(cand_df, sym, "binance", htf_df)
                         if signal and signal.score >= min_score:
                             signals.append(signal)
                             self._lit_cooldowns[sym] = time.time()
+                            logger.info(f"LIT candidate: {sym} score={signal.score:.2f} setup={signal.strategy}")
                     except Exception as e:
                         logger.warning(f"LIT loop error {sym}: {e}")
-                    await asyncio.sleep(0.1)
+                    await asyncio.sleep(0.2)
 
                 signals.sort(key=lambda s: s.score, reverse=True)
                 selected = signals[:max_open]
@@ -839,6 +866,8 @@ class ForwardEngine:
                     await self._handle_lit_signal(signal)
                 if selected:
                     logger.info(f"LIT loop: {len(selected)} signals selected from {len(lit_symbols)} symbols")
+                else:
+                    logger.debug(f"LIT loop: 0 signals from {len(lit_symbols)} symbols")
             except Exception as e:
                 logger.error(f"LIT loop error: {e}")
             await asyncio.sleep(eval_interval)
