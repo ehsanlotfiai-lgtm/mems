@@ -342,6 +342,13 @@ meme_hunter:
 
   max_results_per_strategy: 10
 
+  # ⭐ انتخاب‌های ویژه امروز — سخت‌گیرترین فیلتر، فقط قابل‌اعتمادترین توکن‌ها
+  daily_picks_min_score: 0.70
+  daily_picks_min_strategies: 2
+  daily_picks_min_liquidity_usd: 5000
+  daily_picks_min_volume_1h_usd: 1000
+  daily_picks_max_warning_flags: 1
+
 # ------------------------------------------------------------
 # Scalping — اسکلپ روی ۲۰۰ ارز برتر — spot + futures — 5m
 # ------------------------------------------------------------

@@ -103,6 +103,16 @@ class HunterConfig:
     scan_interval_seconds: int = 30
     max_results_per_strategy: int = 20
 
+    # Daily "special picks" (⭐ انتخاب‌های ویژه) — the higher-confidence subset
+    daily_picks_min_score: float = 0.70
+    daily_picks_min_strategies: int = 2
+    daily_picks_min_liquidity_usd: float = 5000
+    daily_picks_min_volume_1h_usd: float = 1000
+    # Reject a candidate if it has more than this many non-critical (⚠️) warning
+    # flags, even if no single flag is "critical" (🚨) on its own — multiple
+    # small warnings compounding is itself a trust signal worth acting on.
+    daily_picks_max_warning_flags: int = 1
+
 
 def config_from_yaml(d: Dict[str, Any]) -> HunterConfig:
     c = HunterConfig()
@@ -115,6 +125,9 @@ def config_from_yaml(d: Dict[str, Any]) -> HunterConfig:
         "post_migration_min_volume_1h", "post_migration_min_liquidity",
         "post_migration_min_txns", "smart_money_min_wallets",
         "narrative_min_score", "scan_interval_seconds", "max_results_per_strategy",
+        "daily_picks_min_score", "daily_picks_min_strategies",
+        "daily_picks_min_liquidity_usd", "daily_picks_min_volume_1h_usd",
+        "daily_picks_max_warning_flags",
     ]:
         if field_name in d:
             setattr(c, field_name, type(getattr(c, field_name))(d[field_name]))
@@ -1694,6 +1707,11 @@ class MemeHunter:
         self._by_strategy: Dict[str, List[HunterHit]] = {}
         # Time-based dedup: token_key -> last detection timestamp
         self._detected_recently: Dict[str, float] = {}
+        # token_key -> set of ALL distinct strategy names that hit it this scan
+        # (must be persisted on self — self._all_hits is later collapsed to a
+        # single best-scoring HunterHit per token, so it can no longer answer
+        # "how many strategies agreed on this token" after dedup).
+        self._token_strategies: Dict[str, Set[str]] = {}
         # News tracker (for trending boost)
         self._news_tracker: Any = None
         try:
@@ -1780,11 +1798,37 @@ class MemeHunter:
             contract_hits, whale_hits, liquidity_hits, holder_hits,
             volume_hits, momentum_hits,
         ]
+        # token_key -> merged risk_flags from ALL strategies that hit it (not
+        # just the best-scoring one) — a risk found by ANY strategy must not
+        # be silently dropped just because a different strategy scored the
+        # token higher and "won" the dedup below. This matters a lot for
+        # trustworthiness: e.g. contract_safety might flag "🚨 Bundle detected"
+        # at score 0.55 while narrative scores the same token 0.80 with no
+        # flags at all — without merging, that critical flag would vanish.
+        token_all_risk_flags: Dict[str, List[str]] = {}
         for strat_hits in all_strategy_lists:
             for h in strat_hits:
                 token_strategies.setdefault(h.token_key, set()).add(h.strategy)
+                for rf in h.risk_flags:
+                    bucket = token_all_risk_flags.setdefault(h.token_key, [])
+                    if rf not in bucket:
+                        bucket.append(rf)
                 if h.token_key not in all_candidates or h.score > all_candidates[h.token_key].score:
                     all_candidates[h.token_key] = h
+
+        # Merge in any risk flags raised by non-winning strategies for the
+        # same token, onto the single hit object that survives dedup.
+        for token_key, hit in all_candidates.items():
+            merged = token_all_risk_flags.get(token_key, [])
+            for rf in merged:
+                if rf not in hit.risk_flags:
+                    hit.risk_flags.append(rf)
+
+        # Persist the full per-token strategy-agreement map BEFORE self._all_hits
+        # collapses each token down to a single best hit below — this is the
+        # only place this information is available; get_daily_picks() needs it
+        # to know how many DIFFERENT strategies actually agreed on a token.
+        self._token_strategies = token_strategies
 
         self._all_hits = []
         for token_key, hit in all_candidates.items():
@@ -1843,40 +1887,47 @@ class MemeHunter:
         return [h.to_dict() for h in self._by_strategy.get(strategy, [])]
 
     def get_daily_picks(self, limit: int = 5) -> List[dict]:
-        """انتخاب ۴-۵ توکن با احتمال بالا برای پامپ روزانه.
+        """انتخاب ۴-۵ توکن با احتمال بالا برای پامپ روزانه — قابل اعتمادترین‌ها.
 
-        فیلترها:
-        - امتیاز >= 0.70
-        - تأیید حداقل ۲ استراتژی (cross-strategy)
-        - حجم معقول (> $1000)
-        - نقدینگی > $5000
+        فیلترها (قابل تنظیم در config.yaml -> meme_hunter.daily_picks_*):
+        - امتیاز >= daily_picks_min_score (پیش‌فرض ۰.۷۰)
+        - تأیید حداقل daily_picks_min_strategies استراتژی مستقل (cross-strategy)
+        - نقدینگی >= daily_picks_min_liquidity_usd
+        - حجم ۱ ساعته >= daily_picks_min_volume_1h_usd
+        - بدون هیچ پرچم ریسک بحرانی (🚨) و حداکثر daily_picks_max_warning_flags
+          پرچم هشدار (⚠️) — چند هشدار کوچک هم‌زمان یعنی توکن غیرقابل‌اعتماد است
         """
         candidates = []
         for hit in self._all_hits:
-            if hit.score < 0.70:
+            if hit.score < self.cfg.daily_picks_min_score:
                 continue
-            # Count how many strategies hit this token
-            strat_count = len(self._by_strategy.get(hit.token_key, set())
-                             if hasattr(self._by_strategy.get(hit.token_key), '__len__')
-                             else [h for h in self._all_hits if h.token_key == hit.token_key])
-            # Count unique strategies from _all_hits for this token
-            unique_strats = set()
-            for h in self._all_hits:
-                if h.token_key == hit.token_key:
-                    unique_strats.add(h.strategy)
-            if len(unique_strats) < 2:
+            # How many DISTINCT strategies agreed on this token this scan —
+            # read from the persisted per-scan map (self._all_hits itself has
+            # already been collapsed to one entry per token, so it cannot be
+            # used to recover this count).
+            unique_strats = self._token_strategies.get(hit.token_key, {hit.strategy})
+            if len(unique_strats) < self.cfg.daily_picks_min_strategies:
                 continue
-            # Require minimum liquidity and volume
-            if hit.token.liquidity_usd < 5000:
+            # Require minimum liquidity and volume — proxies for "real" trading
+            # activity vs. an illiquid/manipulated token.
+            if hit.token.liquidity_usd < self.cfg.daily_picks_min_liquidity_usd:
                 continue
-            if hit.token.volume_1h_usd < 1000:
+            if hit.token.volume_1h_usd < self.cfg.daily_picks_min_volume_1h_usd:
                 continue
-            # Risk flag filter — reject tokens with critical risk flags
-            has_critical_risk = any(
-                "دستکاری" in f or "Honeypot" in f or "Dump" in f
-                for f in hit.risk_flags
-            )
-            if has_critical_risk:
+            # Reject anything with a CRITICAL risk flag (🚨) — proxy detector,
+            # honeypot suspicion, mint/freeze authority, bundle buys, dumps,
+            # extreme concentration, etc. Every strategy in this file prefixes
+            # its serious findings with 🚨, so matching on that emoji (instead
+            # of a hardcoded, incomplete list of Persian/English substrings)
+            # reliably catches all of them regardless of which strategy raised it.
+            critical_flags = [f for f in hit.risk_flags if "🚨" in f]
+            if critical_flags:
+                continue
+            # Too many *minor* warnings (⚠️) stacked together is itself a red
+            # flag even without a single critical one (e.g. low liquidity +
+            # dev holding + thin tx count all at once).
+            warning_flags = [f for f in hit.risk_flags if "⚠️" in f]
+            if len(warning_flags) > self.cfg.daily_picks_max_warning_flags:
                 continue
             candidates.append({
                 "symbol": hit.token.symbol,
