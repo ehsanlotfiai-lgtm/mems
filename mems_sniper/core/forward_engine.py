@@ -432,41 +432,12 @@ class ForwardEngine:
                 break
 
     async def _dex_maybe_evaluate(self, token, info: SymbolInfo) -> None:
-        now = time.time()
-        token_key = f"{token.chain}:{token.address}"
-        if now - self._signal_cooldowns.get(token_key, 0) < self._signal_cooldown_seconds:
-            return
-        price_change = getattr(token, 'price_change_5m_pct', 0) or 0
-        if abs(price_change) < 1.0:
-            return
-        exchange = token.dex or "dex"
-        try:
-            sig = await self.confluence.evaluate_symbol(exchange, info)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception(f"DEX evaluate error {exchange} {info.symbol}: {exc}")
-            return
-        if sig is None:
-            return
-        await self.storage.save_signal(sig)
-        self._signal_cooldowns[token_key] = time.time()
-        logger.info(
-            f"DEX SIGNAL {sig.exchange} {token.symbol} ({token.chain}) {sig.side.value} "
-            f"score={sig.score:.2f} -> {sig.rationale}"
-        )
-        pos = self.risk.open_from_signal(sig)
-        if pos is not None:
-            await self.storage.open_paper(pos, signal_id=sig.id)
-            self._emit_dashboard({"type": "signal_opened", "signal": sig.to_dict(), "position": pos.to_dict()})
-        if self.notify is not None:
-            try:
-                await self.notify.send_signal(sig)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(f"telegram send failed: {exc}")
-        for cb in self._dashboard_callbacks:
-            try:
-                await cb({"type": "signal", "data": sig.to_dict()})
-            except Exception as exc:  # noqa: BLE001
-                logger.debug(f"dashboard cb error: {exc}")
+        """DEX tokens are ONLY tracked for meme hunter / price updates.
+        They do NOT generate signals in the main signals tab.
+        Signals tab = CEX futures only (top 100).
+        """
+        # DEX tokens only update prices for open positions, no new signals
+        return
 
     # ---------------------------------------------------- meme hunter loop
     async def _meme_hunter_loop(self) -> None:

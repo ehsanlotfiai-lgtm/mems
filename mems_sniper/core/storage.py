@@ -175,7 +175,7 @@ class Storage:
 
     async def recent_signals(self, limit: int = 100) -> List[dict]:
         cur = await self.db.execute(
-            "SELECT * FROM signals WHERE id NOT LIKE 'SCP_%' ORDER BY created_at DESC LIMIT ?", (limit,)
+            "SELECT * FROM signals WHERE id NOT LIKE 'SCP_%' AND id NOT LIKE 'LIT_%' AND exchange NOT IN ('dex', 'pumpfun', 'raydium', 'pancakeswap', 'uniswap') ORDER BY created_at DESC LIMIT ?", (limit,)
         )
         rows = await cur.fetchall()
         cols = [d[0] for d in cur.description]
