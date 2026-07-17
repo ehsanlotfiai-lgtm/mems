@@ -821,8 +821,17 @@ def create_app(
     # ──────────────────────────── LIT Strategy Endpoints
     try:
         from strategies.lit_engine import LITEngine
+        import pandas as _pd_lit
         _lit_engine = LITEngine(settings.raw.get("lit", {}))
         _lit_lit_cfg = settings.raw.get("lit", {})
+
+        def _to_lit_df(ohlcv_list):
+            """Convert OHLCV list to real pandas DataFrame for LIT engine."""
+            return _pd_lit.DataFrame([{
+                "open": float(c.open), "high": float(c.high),
+                "low": float(c.low), "close": float(c.close),
+                "volume": float(c.volume), "timestamp": int(c.timestamp),
+            } for c in ohlcv_list])
 
         try:
             import pandas as _pd
@@ -946,7 +955,7 @@ def create_app(
 
                 htf = "1h" if timeframe in ("1m", "5m", "15m") else "4h"
                 htf_data = await em.fetch_ohlcv("binance", symbol, htf, limit=200)
-                htf_df = _to_df(htf_data) if htf_data else None
+                htf_df = _to_lit_df(htf_data) if htf_data else None
 
                 trades = []
                 min_score = float(_lit_lit_cfg.get("min_score", 0.70))
@@ -958,7 +967,7 @@ def create_app(
                         break
                     w_start = max(0, i - window)
                     w_ohlcv = ohlcv[w_start:i+1]
-                    w_df = _to_df(w_ohlcv)
+                    w_df = _to_lit_df(w_ohlcv)
 
                     try:
                         signal = _lit_engine.analyze(w_df, symbol, "binance", htf_df)
@@ -1077,10 +1086,10 @@ def create_app(
                 timestamps = np.array([c.timestamp for c in ohlcv], dtype=float)
 
                 # Try full LIT signal first
-                df = _to_df(ohlcv)
+                df = _to_lit_df(ohlcv)
                 # Fetch HTF data for better bias
                 htf_ohlcv = await em.fetch_ohlcv("binance", symbol, "1h", limit=100)
-                htf_df = _to_df(htf_ohlcv) if htf_ohlcv else None
+                htf_df = _to_lit_df(htf_ohlcv) if htf_ohlcv else None
 
                 signal = _lit_engine.analyze(df, symbol, "binance", htf_df)
                 if signal:
