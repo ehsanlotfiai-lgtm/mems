@@ -912,6 +912,23 @@ def create_app(
                         d["strategy"] = "lit_structure"
                     # Add timeframe info
                     d["timeframe"] = "15m"  # LIT trigger TF
+
+                    # ── Filter out buggy signals (SL on wrong side) ──
+                    entry = d.get("entry", 0) or 0
+                    sl = d.get("stop_loss", 0) or 0
+                    side = d.get("side", "")
+                    if entry > 0 and sl > 0:
+                        if side == "long" and sl >= entry:
+                            continue  # Skip buggy signal
+                        if side == "short" and sl <= entry:
+                            continue  # Skip buggy signal
+                        # Skip if TP too close (< 0.3% from entry)
+                        tp = d.get("take_profit", 0) or 0
+                        if tp > 0:
+                            tp_dist = abs(tp - entry) / entry * 100
+                            if tp_dist < 0.3:
+                                continue  # Skip signal with tiny TP
+
                     signals.append(d)
                 return {"signals": signals, "count": len(signals)}
             except Exception as exc:
