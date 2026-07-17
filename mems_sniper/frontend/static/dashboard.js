@@ -1531,7 +1531,9 @@ function renderScalpSignalCard(s) {
 function renderScalpSignals() {
   const box = $('#scalp_signals_live');
   if (!box) return;
-  let filtered = scalpCache;
+  // Use ALL signals when setup filter is active (not just cache of 30)
+  let source = scalpFilter.startsWith('setup_') ? (window._allScalpSignals || scalpCache) : scalpCache;
+  let filtered = source;
   // Status filter
   if (scalpFilter === 'open' || scalpFilter === 'tp' || scalpFilter === 'sl') {
     filtered = filtered.filter(s => {
