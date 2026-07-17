@@ -293,42 +293,61 @@ class ExecutionEngine:
             return current_price - spread, current_price + spread, current_price
 
     def _calc_stop_loss(self, candidate: SetupCandidate, atr: float, side: str) -> float:
-        """Structural stop placement."""
-        if candidate.sweep and candidate.sweep.pool:
-            # Stop beyond the sweep wick
-            if side == "long":
-                return candidate.sweep.pool.price - candidate.sweep.max_excursion
-            else:
-                return candidate.sweep.pool.price + candidate.sweep.max_excursion
-
-        # Fallback: use FVG boundary or ATR-based
-        if candidate.fvg:
-            if side == "long":
-                return candidate.fvg.bottom - 0.3 * atr
-            else:
-                return candidate.fvg.top + 0.3 * atr
-
-        # Last fallback: ATR-based from current price or entry
+        """Structural stop placement — GUARANTEED on correct side of entry."""
         entry = candidate.fvg.midpoint if candidate.fvg else 0
         if entry <= 0:
-            # Use displacement origin
-            if candidate.displacement:
-                entry = candidate.displacement.body_size  # Not ideal but safe
+            entry = candidate.order_block.bottom if candidate.order_block and side == "long" else \
+                    candidate.order_block.top if candidate.order_block else 0
+
+        # Try structural stop from sweep
+        sl = 0.0
+        if candidate.sweep and candidate.sweep.pool:
+            if side == "long":
+                sl = candidate.sweep.pool.price - candidate.sweep.max_excursion
             else:
-                return 0  # Will fail validation
-        if side == "long":
-            return entry - 1.5 * atr
-        else:
-            return entry + 1.5 * atr
+                sl = candidate.sweep.pool.price + candidate.sweep.max_excursion
+
+        # Try FVG boundary
+        if sl == 0.0 and candidate.fvg:
+            if side == "long":
+                sl = candidate.fvg.bottom - 0.3 * atr
+            else:
+                sl = candidate.fvg.top + 0.3 * atr
+
+        # ATR fallback
+        if sl == 0.0 and entry > 0:
+            if side == "long":
+                sl = entry - 1.5 * atr
+            else:
+                sl = entry + 1.5 * atr
+
+        # ── CRITICAL: Validate SL is on CORRECT side of entry ──
+        if entry > 0:
+            if side == "long" and sl >= entry:
+                # SL above entry for long = WRONG! Fix it
+                sl = entry - 1.5 * atr
+            elif side == "short" and sl <= entry:
+                # SL below entry for short = WRONG! Fix it
+                sl = entry + 1.5 * atr
+
+        # Ensure minimum distance (at least 0.4% from entry for commission coverage)
+        if entry > 0:
+            min_sl_distance = entry * 0.004  # 0.4%
+            if side == "long" and (entry - sl) < min_sl_distance:
+                sl = entry - min_sl_distance
+            elif side == "short" and (sl - entry) < min_sl_distance:
+                sl = entry + min_sl_distance
+
+        return sl
 
     def _calc_targets(
         self, candidate: SetupCandidate, entry: float,
         risk: float, liq_map: LiquidityMap, side: str,
     ):
         """Calculate TP1/TP2/TP3 with minimum profitability guarantee."""
-        # Ensure minimum TP distance (must be > 0.5% for commission coverage)
-        min_tp_distance = entry * 0.005  # At least 0.5% from entry
-        effective_risk = max(risk, min_tp_distance / 1.5)
+        # Ensure minimum TP distance (must be > 0.8% for commission coverage + profit)
+        min_tp_distance = entry * 0.008  # At least 0.8% from entry
+        effective_risk = max(risk, min_tp_distance / 2.0)
 
         if side == "long":
             tp1 = entry + max(effective_risk * 1.5, min_tp_distance)

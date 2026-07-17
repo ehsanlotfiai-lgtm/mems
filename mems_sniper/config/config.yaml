@@ -449,8 +449,8 @@ scalping:
     scalp_sp2l:
       enabled: true
       weight: 1.3
-      min_spike_bars: 3
-      min_body_atr: 0.8
+      min_spike_bars: 2
+      min_body_atr: 0.6
 
 # ------------------------------------------------------------
 # Assistant

@@ -917,12 +917,12 @@ class ScalpSP2L(BaseScalpStrategy):
 
     def _detect_spike(self, open_, close, high, low, atr, n, direction, min_bars, min_body_atr):
         """Detect a spike (consecutive large directional candles)."""
-        # Scan last 10 candles for a sequence of min_bars large candles
-        for start in range(n - 10, n - min_bars):
+        # Scan last 15 candles for a sequence of min_bars large candles
+        for start in range(max(0, n - 15), n - min_bars):
             if start < 0:
                 continue
             count = 0
-            for i in range(start, min(start + 8, n)):
+            for i in range(start, min(start + 10, n)):
                 body = abs(float(close.iloc[i]) - float(open_.iloc[i]))
                 body_ratio = body / max(atr, 1e-10)
                 is_dir = (close.iloc[i] > open_.iloc[i]) if direction == "bullish" else (close.iloc[i] < open_.iloc[i])
@@ -931,7 +931,7 @@ class ScalpSP2L(BaseScalpStrategy):
                 else:
                     if count >= min_bars:
                         return (start, start + count - 1)
-                    break
+                    count = 0  # Reset but keep scanning
             if count >= min_bars:
                 return (start, start + count - 1)
         return None
