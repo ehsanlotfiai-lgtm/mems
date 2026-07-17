@@ -655,12 +655,68 @@ def create_app(
         active = sum(1 for sig in signals if sig.get("status") == "open")
         tp = sum(1 for sig in signals if sig.get("status") == "tp")
         sl = sum(1 for sig in signals if sig.get("status") == "sl")
+
+        # Per-setup stats from paper_trades
+        setup_stats = {}
+        try:
+            cur = await s.db.execute(
+                """SELECT signal_id, pnl_pct, pnl_usdt, close_reason
+                   FROM paper_trades WHERE signal_id LIKE 'SCP_%' AND pnl_pct IS NOT NULL"""
+            )
+            rows = await cur.fetchall()
+            # Get signal rationale to determine setup
+            for sig_id, pnl, pnl_usdt, reason in rows:
+                # Lookup signal rationale
+                sig_cur = await s.db.execute("SELECT rationale FROM signals WHERE id=?", (sig_id,))
+                sig_row = await sig_cur.fetchone()
+                rationale = sig_row[0] if sig_row else ""
+                # Detect setup from rationale
+                setup = "other"
+                if "scalp_micromap" in (rationale or ""):
+                    setup = "micromap"
+                elif "scalp_pro_btb" in (rationale or ""):
+                    setup = "pro_btb"
+                elif "scalp_sp2l" in (rationale or ""):
+                    setup = "sp2l"
+                elif "scalp_vwap" in (rationale or ""):
+                    setup = "vwap"
+                elif "scalp_momentum" in (rationale or ""):
+                    setup = "momentum"
+                elif "scalp_squeeze" in (rationale or ""):
+                    setup = "squeeze"
+                elif "scalp_bb" in (rationale or ""):
+                    setup = "bb_touch"
+                elif "scalp_engulfing" in (rationale or ""):
+                    setup = "engulfing"
+
+                if setup not in setup_stats:
+                    setup_stats[setup] = {"total": 0, "wins": 0, "losses": 0, "pnl_sum": 0.0, "trades": []}
+                setup_stats[setup]["total"] += 1
+                if pnl and pnl > 0:
+                    setup_stats[setup]["wins"] += 1
+                elif pnl and pnl < 0:
+                    setup_stats[setup]["losses"] += 1
+                setup_stats[setup]["pnl_sum"] += float(pnl or 0)
+                setup_stats[setup]["trades"].append({
+                    "signal_id": sig_id, "pnl_pct": pnl, "pnl_usdt": pnl_usdt,
+                    "reason": reason, "setup": setup,
+                })
+
+            # Calculate win rates per setup
+            for setup, st in setup_stats.items():
+                st["win_rate"] = round(st["wins"] / st["total"] * 100, 1) if st["total"] > 0 else 0
+                st["avg_pnl"] = round(st["pnl_sum"] / st["total"], 2) if st["total"] > 0 else 0
+                st["trades"] = st["trades"][-20:]  # Last 20 trades only
+        except Exception:
+            pass
+
         return {
             "total_signals": total,
             "active": active,
             "tp": tp,
             "sl": sl,
             "win_rates": win_rates,
+            "setup_stats": setup_stats,
         }
 
     @app.post("/api/scalping/test")

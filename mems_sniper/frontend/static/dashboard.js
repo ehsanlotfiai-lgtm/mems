@@ -1583,6 +1583,59 @@ function renderScalpWinRates(wr) {
 function renderScalpStats(data) {
   const box = $('#scalp_stats');
   if (!box) return;
+
+  const setupNames = {
+    'micromap': '🎯 MicroMap', 'pro_btb': '🔄 PRO BTB', 'sp2l': '📈 SP2L',
+    'vwap': '📐 VWAP', 'momentum': '🔥 مومنتوم', 'squeeze': '💎 Squeeze',
+    'bb_touch': '🎯 بولینگر', 'engulfing': '🕯️ انگالفینگ', 'other': '📊 سایر',
+  };
+
+  let setupHtml = '';
+  if (data.setup_stats && Object.keys(data.setup_stats).length > 0) {
+    setupHtml = `
+      <div style="margin-top:12px">
+        <h4 style="margin:0 0 8px 0;font-size:13px">📊 وین ریت هر ستاپ</h4>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px">
+          ${Object.entries(data.setup_stats).map(([name, st]) => {
+            const wrColor = st.win_rate >= 60 ? 'var(--success)' : st.win_rate >= 40 ? 'var(--accent)' : 'var(--danger)';
+            const pnlColor = st.avg_pnl >= 0 ? 'var(--success)' : 'var(--danger)';
+            return `<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:10px;text-align:center">
+              <div style="font-size:12px;font-weight:bold;margin-bottom:4px">${setupNames[name] || name}</div>
+              <div style="font-size:20px;font-weight:bold;color:${wrColor}">${st.win_rate}%</div>
+              <div style="font-size:11px;color:var(--text-muted)">${st.wins}W / ${st.losses}L (${st.total} ترید)</div>
+              <div style="font-size:11px;color:${pnlColor}">میانگین: ${st.avg_pnl >= 0 ? '+' : ''}${st.avg_pnl}%</div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>`;
+
+    // Show last closed trades per setup
+    const allTrades = Object.values(data.setup_stats).flatMap(st => st.trades || []);
+    if (allTrades.length > 0) {
+      setupHtml += `
+        <div style="margin-top:12px">
+          <h4 style="margin:0 0 8px 0;font-size:13px">📋 آخرین معاملات بسته‌شده</h4>
+          <div style="overflow-x:auto;max-height:200px;overflow-y:auto">
+            <table class="data-table" style="font-size:11px">
+              <thead><tr><th>سیگنال</th><th>ستاپ</th><th>سود/ضرر</th><th>نتیجه</th></tr></thead>
+              <tbody>
+                ${allTrades.slice(-15).reverse().map(t => {
+                  const pnlC = t.pnl_pct >= 0 ? 'var(--success)' : 'var(--danger)';
+                  const icon = t.pnl_pct >= 0 ? '✅' : '❌';
+                  return `<tr>
+                    <td>${t.signal_id || '—'}</td>
+                    <td>${setupNames[t.setup] || t.setup}</td>
+                    <td style="color:${pnlC};font-weight:bold">${t.pnl_pct >= 0 ? '+' : ''}${t.pnl_pct?.toFixed(2) || 0}%</td>
+                    <td>${icon} ${t.reason || ''}</td>
+                  </tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>`;
+    }
+  }
+
   box.innerHTML = `
     <div class="hunter-summary-cards">
       <div class="card stat-card hunter-stat">
@@ -1602,6 +1655,7 @@ function renderScalpStats(data) {
         <span class="card-value" style="color:var(--danger)">${data.sl || 0}</span>
       </div>
     </div>
+    ${setupHtml}
   `;
 }
 
