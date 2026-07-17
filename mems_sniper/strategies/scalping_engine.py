@@ -219,8 +219,45 @@ class ScalpingEngine:
         risk_pct = float(self.s.risk.get("risk_per_trade_pct", 1.0)) / 100.0
         size_usdt = float(self.s.risk.get("initial_paper_balance", 10000)) * risk_pct
 
+        # ── Commission filter: reject if TP1 profit < 2x commission cost ──
+        commission_pct = 0.075  # Binance futures taker fee (0.075% per side = 0.15% round trip)
+        tp1_profit_pct = abs(tp - entry) / max(entry, 1e-10) * 100
+        round_trip_commission = commission_pct * 2  # entry + exit
+        if tp1_profit_pct <= round_trip_commission * 2:
+            # Profit would be eaten by fees — skip
+            return None
+
+        # ── Leverage calculation based on SL distance and score ──
+        sl_distance_pct = abs(entry - sl) / max(entry, 1e-10) * 100
+        if sl_distance_pct > 0:
+            # Max leverage = keep loss per trade under risk_pct of balance
+            max_safe_leverage = min(int(risk_pct * 100 / sl_distance_pct * 5), 20)
+        else:
+            max_safe_leverage = 3
+        # Suggest leverage based on score
+        if final >= 0.70:
+            suggested_leverage = min(max_safe_leverage, 10)
+        elif final >= 0.50:
+            suggested_leverage = min(max_safe_leverage, 7)
+        else:
+            suggested_leverage = min(max_safe_leverage, 5)
+        suggested_leverage = max(suggested_leverage, 2)
+
+        # ── Identify primary setup name from hits ──
+        setup_names_priority = ["scalp_micromap", "scalp_pro_btb", "scalp_sp2l",
+                                "scalp_vwap_rejection", "scalp_momentum_burst", "scalp_volume_climax",
+                                "scalp_squeeze_release", "scalp_engulfing", "scalp_rsi_extreme",
+                                "scalp_stoch_extreme", "scalp_ema_ribbon", "scalp_bb_touch", "scalp_order_flow"]
+        primary_setup = "scalp"
+        for sn in setup_names_priority:
+            if any(h.name == sn for h in all_hits):
+                primary_setup = sn
+                break
+
         htf_label = {"bullish": "🟢 صعودی", "bearish": "🔴 نزولی", "neutral": "➡️ خنثی"}
         rationale = self._explain(all_hits, final, tf_breakdown, side, atr_val, htf_trend, htf_label)
+        # Append leverage and setup info to rationale
+        rationale += f" | ستاپ: {primary_setup} | اهرم: {suggested_leverage}x"
 
         signal = Signal(
             id="SCP_" + uuid.uuid4().hex[:8],

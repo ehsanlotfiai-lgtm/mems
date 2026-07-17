@@ -1372,6 +1372,9 @@ const scalpStrategyFa = {
   scalp_order_flow: '⚖️ جریان سفارش',
   scalp_squeeze_release: '💎 ریلیز Squeeze',
   scalp_engulfing: '🕯️ انگالفینگ',
+  scalp_micromap: '🎯 MicroMap',
+  scalp_pro_btb: '🔄 PRO BTB',
+  scalp_sp2l: '📈 SP2L',
 };
 
 function setScalpFilter(f) {
@@ -1388,6 +1391,32 @@ function renderScalpSignalCard(s) {
   const displayName = s.base || s.symbol;
   const sigStatus = s.status || 'open';
 
+  // Extract setup name and leverage from rationale
+  const rationaleText = s.rationale || '';
+  let setupName = '';
+  let leverage = '';
+  const setupMatch = rationaleText.match(/ستاپ:\s*([\w_]+)/);
+  const levMatch = rationaleText.match(/اهرم:\s*(\d+)x/);
+  if (setupMatch) setupName = setupMatch[1];
+  if (levMatch) leverage = levMatch[1] + 'x';
+
+  // Setup display names
+  const setupFa = {
+    'scalp_micromap': '🎯 MicroMap',
+    'scalp_pro_btb': '🔄 PRO BTB',
+    'scalp_sp2l': '📈 SP2L',
+    'scalp_vwap_rejection': 'VWAP',
+    'scalp_momentum_burst': 'مومنتوم',
+    'scalp_rsi_extreme': 'RSI',
+    'scalp_stoch_extreme': 'استوکاستیک',
+    'scalp_ema_ribbon': 'EMA',
+    'scalp_bb_touch': 'بولینگر',
+    'scalp_volume_climax': 'حجم',
+    'scalp_squeeze_release': 'Squeeze',
+    'scalp_engulfing': 'انگالفینگ',
+    'scalp_order_flow': 'جریان سفارش',
+  };
+
   const tfBreakdown = s.confluence_tf_breakdown || {};
   const tfPills = Object.entries(tfBreakdown)
     .filter(([, v]) => v > 0)
@@ -1398,11 +1427,14 @@ function renderScalpSignalCard(s) {
     })
     .join('');
 
+  const setupBadge = setupName ? `<span class="pill" style="background:rgba(245,158,11,0.15);color:#f59e0b;font-weight:bold">${setupFa[setupName] || setupName}</span>` : '';
+  const leverageBadge = leverage ? `<span class="pill" style="background:rgba(168,85,247,0.15);color:#a855f7;font-weight:bold">⚡ ${leverage}</span>` : '';
+
   return `
-    <div class="signal-card ${s.side} ${statusClass[sigStatus] || ''} scalp-card" style="cursor:pointer;border-left:4px solid #f59e0b" onclick="showSignalOnChart('${s.id}')">
+    <div class="signal-card ${s.side} ${statusClass[sigStatus] || ''} scalp-card" style="cursor:pointer;border-left:4px solid #f59e0b" data-setup="${setupName}" onclick="showSignalOnChart('${s.id}')">
       <div class="sym-row">
         <span class="sym">${displayName}</span>
-        <span class="exch">${s.exchange} ⚡ scalp</span>
+        ${setupBadge}${leverageBadge}
         <span class="sig-badge ${statusClass[sigStatus] || ''}">${statusFa[sigStatus] || sigStatus}</span>
       </div>
       <div class="pills">
@@ -1425,7 +1457,19 @@ function renderScalpSignalCard(s) {
 function renderScalpSignals() {
   const box = $('#scalp_signals_live');
   if (!box) return;
-  let filtered = scalpFilter === 'all' ? scalpCache : scalpCache.filter(s => (s.status || 'open') === scalpFilter);
+  let filtered = scalpCache;
+  // Status filter
+  if (scalpFilter === 'open' || scalpFilter === 'tp' || scalpFilter === 'sl') {
+    filtered = filtered.filter(s => (s.status || 'open') === scalpFilter);
+  }
+  // Setup filter
+  if (scalpFilter.startsWith('setup_')) {
+    const setupKey = 'scalp_' + scalpFilter.replace('setup_', '');
+    filtered = filtered.filter(s => {
+      const rat = s.rationale || '';
+      return rat.includes(setupKey);
+    });
+  }
   box.innerHTML = filtered.map(renderScalpSignalCard).join('') || '<p style="color:#8e95ac">سیگنال اسکلپی ثبت نشده.</p>';
   $('#scalp_count').textContent = scalpCache.length;
 }

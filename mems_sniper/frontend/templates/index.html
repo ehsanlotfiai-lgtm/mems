@@ -141,11 +141,15 @@
         <div id="scalp_stats" class="hunter-summary"></div>
 
         <!-- Filter -->
-        <div class="filter-bar">
+        <div class="filter-bar" style="flex-wrap:wrap">
           <button class="btn scalp-filter-btn active" data-filter="all" onclick="setScalpFilter('all')">⚡ همه</button>
           <button class="btn scalp-filter-btn" data-filter="open" onclick="setScalpFilter('open')">🟢 فعال</button>
           <button class="btn scalp-filter-btn" data-filter="tp" onclick="setScalpFilter('tp')">✅ سود</button>
           <button class="btn scalp-filter-btn" data-filter="sl" onclick="setScalpFilter('sl')">❌ ضرر</button>
+          <span style="width:1px;height:20px;background:rgba(255,255,255,0.2);margin:0 4px"></span>
+          <button class="btn scalp-filter-btn" data-filter="setup_micromap" onclick="setScalpFilter('setup_micromap')">🎯 MicroMap</button>
+          <button class="btn scalp-filter-btn" data-filter="setup_pro_btb" onclick="setScalpFilter('setup_pro_btb')">🔄 PRO BTB</button>
+          <button class="btn scalp-filter-btn" data-filter="setup_sp2l" onclick="setScalpFilter('setup_sp2l')">📈 SP2L</button>
         </div>
 
         <!-- Live Scalp Signals -->
