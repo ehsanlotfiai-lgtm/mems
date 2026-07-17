@@ -215,7 +215,7 @@ strategies:
     weight: 1.2
 
 # امتیاز حداقل برای فیوچرز ساعتی — متعادل برای وین ریت و تعداد سیگنال بالا
-min_signal_score: 0.55
+min_signal_score: 0.45
 
 # ------------------------------------------------------------
 # Risk management
@@ -249,7 +249,7 @@ backtest:
 # ------------------------------------------------------------
 forward:
   universe_refresh_minutes: 15
-  poll_interval_seconds: 30
+  poll_interval_seconds: 300
   signal_cooldown_seconds: 3600
 
 # ------------------------------------------------------------
@@ -359,7 +359,7 @@ scalping:
     "5m": 0.65
     "15m": 0.35
   # امتیاز کمتر برای بیشتر سیگنال دادن در اسکلپ
-  min_signal_score: 0.30
+  min_signal_score: 0.25
   # SL/TP تنگ برای اسکلپ
   sl_atr_mult: 0.8
   tp_atr_mult: 1.5

@@ -1,14 +1,14 @@
-"""LIT Structure Engine - Market Structure Analysis.
+"""LIT Structure Engine — Market Structure Detection.
 
 Deterministic detection of:
-  - Valid swing highs/lows (fractal-based)
-  - Break of Structure (BOS) - continuation
-  - Change of Character (CHoCH) - reversal signal
+  - Valid swing highs/lows (pivot-based with configurable left/right bars)
+  - HH, HL, LH, LL classification
+  - Break of Structure (BOS) — continuation
+  - Change of Character (CHoCH) — reversal warning
   - Trend state machine (bullish/bearish/ranging)
-  - HTF/LTF alignment
+  - Displacement detection (impulsive moves)
 
-This is Layer 1 of the LIT architecture and must be completely
-deterministic (no lookahead bias).
+Only uses CONFIRMED CLOSED candles. No repainting.
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 
 
-# ─── Enums & Data Models ─────────────────────────────────────
+# ─── Enums ───────────────────────────────────────────────────
 
 class TrendState(str, Enum):
     BULLISH = "bullish"
@@ -27,391 +27,381 @@ class TrendState(str, Enum):
     RANGING = "ranging"
 
 
-class StructureBreak(str, Enum):
+class SwingType(str, Enum):
+    HH = "HH"  # Higher High
+    HL = "HL"  # Higher Low
+    LH = "LH"  # Lower High
+    LL = "LL"  # Lower Low
+    UNCLASSIFIED = "unclassified"
+
+
+class StructureBreakType(str, Enum):
     BULLISH_BOS = "bullish_bos"
     BEARISH_BOS = "bearish_bos"
     BULLISH_CHOCH = "bullish_choch"
     BEARISH_CHOCH = "bearish_choch"
 
 
+# ─── Data Models ─────────────────────────────────────────────
+
 @dataclass
 class SwingPoint:
-    """A validated swing high or low."""
+    """A confirmed swing high or low."""
     index: int
     price: float
-    kind: str           # "high" | "low"
-    strength: int       # number of bars on each side that confirm it
-    valid: bool = True  # False if broken (invalidated by BOS)
+    kind: str              # "high" | "low"
+    classification: SwingType = SwingType.UNCLASSIFIED
+    left_bars: int = 5
+    right_bars: int = 5
+    valid: bool = True     # False if invalidated by structure break
     broken_at: int = -1
+    timestamp: float = 0.0
 
 
 @dataclass
-class StructureEvent:
+class StructureBreak:
     """A BOS or CHoCH event."""
-    kind: StructureBreak
-    index: int          # bar index where it occurred
-    price: float        # price at which structure broke
-    swing_ref: SwingPoint  # the swing point that was broken
-    displacement: float = 0.0  # body size of breaking candle vs ATR
+    kind: StructureBreakType
+    index: int             # candle index where break confirmed
+    price: float           # close price of breaking candle
+    swing_broken: SwingPoint  # which swing was broken
+    displacement: float = 0.0  # body/ATR of breaking candle
+    timestamp: float = 0.0
+
+
+@dataclass
+class Displacement:
+    """An impulsive displacement candle/sequence."""
+    index: int
+    direction: str         # "bullish" | "bearish"
+    body_size: float       # absolute body
+    body_atr_ratio: float  # body / ATR
+    body_range_ratio: float  # body / total range (wick ratio)
+    creates_fvg: bool = False
+    breaks_structure: bool = False
 
 
 @dataclass
 class StructureState:
-    """Complete market structure state at a given moment."""
+    """Complete market structure snapshot."""
     trend: TrendState
     swing_highs: List[SwingPoint]
     swing_lows: List[SwingPoint]
-    last_valid_high: Optional[SwingPoint]
-    last_valid_low: Optional[SwingPoint]
-    events: List[StructureEvent]
-    # Internal tracking
-    last_higher_high: Optional[SwingPoint] = None
-    last_higher_low: Optional[SwingPoint] = None
-    last_lower_high: Optional[SwingPoint] = None
-    last_lower_low: Optional[SwingPoint] = None
+    events: List[StructureBreak]
+    displacements: List[Displacement]
+    last_valid_high: Optional[SwingPoint] = None
+    last_valid_low: Optional[SwingPoint] = None
+    last_hh: Optional[SwingPoint] = None
+    last_hl: Optional[SwingPoint] = None
+    last_lh: Optional[SwingPoint] = None
+    last_ll: Optional[SwingPoint] = None
 
 
 # ─── Structure Engine ────────────────────────────────────────
 
 class StructureEngine:
-    """Deterministic market structure analyzer.
-    
-    Algorithm:
-    1. Find all swing points using fractal method (N bars left, N bars right)
-    2. Classify swings as HH/HL/LH/LL based on sequence
-    3. Track BOS (break of last swing in trend direction)
-    4. Track CHoCH (break of last swing AGAINST trend direction)
-    5. Maintain trend state machine
-    """
+    """Deterministic market structure analyzer using pivot logic."""
 
-    def __init__(self, swing_lookback: int = 5, min_swing_distance: int = 3):
-        self.swing_lookback = swing_lookback
-        self.min_swing_distance = min_swing_distance
+    def __init__(self, left_bars: int = 5, right_bars: int = 5, min_displacement_atr: float = 1.5, min_body_ratio: float = 0.6):
+        self.left_bars = left_bars
+        self.right_bars = right_bars
+        self.min_displacement_atr = min_displacement_atr
+        self.min_body_ratio = min_body_ratio
 
     def analyze(
         self,
+        opens: np.ndarray,
         highs: np.ndarray,
         lows: np.ndarray,
         closes: np.ndarray,
-        opens: np.ndarray,
+        timestamps: Optional[np.ndarray] = None,
     ) -> StructureState:
-        """Full structure analysis on OHLC data.
-        
-        Returns StructureState with all swings, events, and current trend.
-        """
-        n = len(highs)
-        if n < self.swing_lookback * 2 + 5:
-            return StructureState(
-                trend=TrendState.RANGING,
-                swing_highs=[], swing_lows=[],
-                last_valid_high=None, last_valid_low=None,
-                events=[],
-            )
+        """Full structure analysis. Returns StructureState."""
+        n = len(closes)
+        if n < (self.left_bars + self.right_bars + 5):
+            return StructureState(trend=TrendState.RANGING, swing_highs=[], swing_lows=[], events=[], displacements=[])
 
-        # Step 1: Find all swing points
-        swing_highs = self._find_swing_highs(highs, self.swing_lookback)
-        swing_lows = self._find_swing_lows(lows, self.swing_lookback)
+        # Step 1: Find confirmed swing points
+        swing_highs = self._find_swing_highs(highs, timestamps)
+        swing_lows = self._find_swing_lows(lows, timestamps)
 
-        # Step 2: Determine structure sequence and trend
-        trend, events = self._build_structure(
-            swing_highs, swing_lows, highs, lows, closes, opens
-        )
+        # Step 2: Classify swings (HH/HL/LH/LL)
+        self._classify_swings(swing_highs, swing_lows)
 
-        # Step 3: Find last valid (unbroken) swings
-        last_valid_high = None
-        last_valid_low = None
-        for sh in reversed(swing_highs):
-            if sh.valid:
-                last_valid_high = sh
-                break
-        for sl in reversed(swing_lows):
-            if sl.valid:
-                last_valid_low = sl
-                break
+        # Step 3: Detect structure breaks (BOS/CHoCH)
+        events = self._detect_structure_breaks(swing_highs, swing_lows, closes, timestamps)
+
+        # Step 4: Determine trend
+        trend = self._determine_trend(swing_highs, swing_lows, events)
+
+        # Step 5: Detect displacements
+        atr = self._calc_atr(highs, lows, closes, 14)
+        displacements = self._detect_displacements(opens, highs, lows, closes, atr, timestamps)
+
+        # Step 6: Find last valid swings
+        last_valid_high = next((s for s in reversed(swing_highs) if s.valid), None)
+        last_valid_low = next((s for s in reversed(swing_lows) if s.valid), None)
 
         return StructureState(
             trend=trend,
             swing_highs=swing_highs,
             swing_lows=swing_lows,
+            events=events,
+            displacements=displacements,
             last_valid_high=last_valid_high,
             last_valid_low=last_valid_low,
-            events=events,
+            last_hh=next((s for s in reversed(swing_highs) if s.classification == SwingType.HH), None),
+            last_hl=next((s for s in reversed(swing_lows) if s.classification == SwingType.HL), None),
+            last_lh=next((s for s in reversed(swing_highs) if s.classification == SwingType.LH), None),
+            last_ll=next((s for s in reversed(swing_lows) if s.classification == SwingType.LL), None),
         )
 
-    def get_htf_bias(
-        self,
-        highs: np.ndarray,
-        lows: np.ndarray,
-        closes: np.ndarray,
-        opens: np.ndarray,
-    ) -> TrendState:
-        """Quick HTF bias determination without full event tracking."""
-        state = self.analyze(highs, lows, closes, opens)
-        return state.trend
-
-    # ─── Internal Methods ────────────────────────────────────
-
-    def _find_swing_highs(self, highs: np.ndarray, lookback: int) -> List[SwingPoint]:
-        """Find swing highs using fractal method.
-        
-        A swing high is confirmed when `lookback` bars on each side
-        have lower highs.
-        """
+    def _find_swing_highs(self, highs: np.ndarray, timestamps: Optional[np.ndarray]) -> List[SwingPoint]:
+        """Find swing highs using pivot logic (left_bars + right_bars)."""
         swings = []
         n = len(highs)
-        last_idx = -self.min_swing_distance - 1
-
-        for i in range(lookback, n - lookback):
-            is_swing = True
-            for j in range(1, lookback + 1):
-                if highs[i - j] >= highs[i] or highs[i + j] >= highs[i]:
-                    is_swing = False
+        for i in range(self.left_bars, n - self.right_bars):
+            is_pivot = True
+            for j in range(1, self.left_bars + 1):
+                if highs[i - j] > highs[i]:
+                    is_pivot = False
                     break
-
-            if is_swing and (i - last_idx) >= self.min_swing_distance:
-                strength = self._calc_swing_strength(highs, i, "high")
+            if not is_pivot:
+                continue
+            for j in range(1, self.right_bars + 1):
+                if highs[i + j] > highs[i]:
+                    is_pivot = False
+                    break
+            if is_pivot:
+                ts = float(timestamps[i]) if timestamps is not None else 0.0
                 swings.append(SwingPoint(
-                    index=i,
-                    price=float(highs[i]),
-                    kind="high",
-                    strength=strength,
+                    index=i, price=float(highs[i]), kind="high",
+                    left_bars=self.left_bars, right_bars=self.right_bars,
+                    timestamp=ts,
                 ))
-                last_idx = i
-
         return swings
 
-    def _find_swing_lows(self, lows: np.ndarray, lookback: int) -> List[SwingPoint]:
-        """Find swing lows using fractal method."""
+    def _find_swing_lows(self, lows: np.ndarray, timestamps: Optional[np.ndarray]) -> List[SwingPoint]:
+        """Find swing lows using pivot logic."""
         swings = []
         n = len(lows)
-        last_idx = -self.min_swing_distance - 1
-
-        for i in range(lookback, n - lookback):
-            is_swing = True
-            for j in range(1, lookback + 1):
-                if lows[i - j] <= lows[i] or lows[i + j] <= lows[i]:
-                    is_swing = False
+        for i in range(self.left_bars, n - self.right_bars):
+            is_pivot = True
+            for j in range(1, self.left_bars + 1):
+                if lows[i - j] < lows[i]:
+                    is_pivot = False
                     break
-
-            if is_swing and (i - last_idx) >= self.min_swing_distance:
-                strength = self._calc_swing_strength(lows, i, "low")
+            if not is_pivot:
+                continue
+            for j in range(1, self.right_bars + 1):
+                if lows[i + j] < lows[i]:
+                    is_pivot = False
+                    break
+            if is_pivot:
+                ts = float(timestamps[i]) if timestamps is not None else 0.0
                 swings.append(SwingPoint(
-                    index=i,
-                    price=float(lows[i]),
-                    kind="low",
-                    strength=strength,
+                    index=i, price=float(lows[i]), kind="low",
+                    left_bars=self.left_bars, right_bars=self.right_bars,
+                    timestamp=ts,
                 ))
-                last_idx = i
-
         return swings
 
-    def _calc_swing_strength(self, data: np.ndarray, idx: int, kind: str) -> int:
-        """Calculate how many bars on each side confirm this swing."""
-        n = len(data)
-        strength = 0
-        for offset in range(1, min(20, n - idx, idx)):
-            if kind == "high":
-                if data[idx - offset] < data[idx] and data[idx + offset] < data[idx]:
-                    strength += 1
-                else:
-                    break
+    def _classify_swings(self, swing_highs: List[SwingPoint], swing_lows: List[SwingPoint]) -> None:
+        """Classify each swing as HH/HL/LH/LL relative to previous."""
+        # Classify highs
+        for i in range(1, len(swing_highs)):
+            prev = swing_highs[i - 1]
+            curr = swing_highs[i]
+            if curr.price > prev.price:
+                curr.classification = SwingType.HH
             else:
-                if data[idx - offset] > data[idx] and data[idx + offset] > data[idx]:
-                    strength += 1
-                else:
-                    break
-        return max(strength, 1)
+                curr.classification = SwingType.LH
 
-    def _build_structure(
-        self,
-        swing_highs: List[SwingPoint],
-        swing_lows: List[SwingPoint],
-        highs: np.ndarray,
-        lows: np.ndarray,
-        closes: np.ndarray,
-        opens: np.ndarray,
-    ) -> Tuple[TrendState, List[StructureEvent]]:
-        """Build structure events (BOS/CHoCH) and determine trend.
-        
-        Logic:
-        - Start with RANGING
-        - If we see HH + HL pattern -> BULLISH
-        - If we see LH + LL pattern -> BEARISH
-        - BOS = price breaks the LAST swing in trend direction
-        - CHoCH = price breaks swing AGAINST trend (first counter-break)
-        """
-        events: List[StructureEvent] = []
+        # Classify lows
+        for i in range(1, len(swing_lows)):
+            prev = swing_lows[i - 1]
+            curr = swing_lows[i]
+            if curr.price > prev.price:
+                curr.classification = SwingType.HL
+            else:
+                curr.classification = SwingType.LL
+
+    def _detect_structure_breaks(
+        self, swing_highs: List[SwingPoint], swing_lows: List[SwingPoint],
+        closes: np.ndarray, timestamps: Optional[np.ndarray],
+    ) -> List[StructureBreak]:
+        """Detect BOS and CHoCH events."""
+        events = []
         n = len(closes)
 
-        if len(swing_highs) < 2 or len(swing_lows) < 2:
-            return TrendState.RANGING, events
-
-        # Merge all swings into chronological order
-        all_swings = sorted(
-            [(s.index, s) for s in swing_highs] + [(s.index, s) for s in swing_lows],
-            key=lambda x: x[0]
-        )
-
-        # Determine initial trend from first few swings
-        trend = TrendState.RANGING
-        prev_high: Optional[SwingPoint] = None
-        prev_low: Optional[SwingPoint] = None
-
-        for _, swing in all_swings:
-            if swing.kind == "high":
-                if prev_high is not None:
-                    if swing.price > prev_high.price:
-                        # Higher high
-                        if trend == TrendState.BEARISH:
-                            # Potential CHoCH - need to check if this breaks structure
-                            pass
-                        if prev_low and prev_low.price > (prev_low.price if not hasattr(prev_low, '_prev_price') else 0):
-                            trend = TrendState.BULLISH
-                    else:
-                        # Lower high
-                        if trend == TrendState.BULLISH:
-                            pass  # First sign of weakness
-                prev_high = swing
-
-            elif swing.kind == "low":
-                if prev_low is not None:
-                    if swing.price < prev_low.price:
-                        # Lower low
-                        if prev_high and prev_high.price < (prev_high.price if prev_high else float('inf')):
-                            trend = TrendState.BEARISH
-                    else:
-                        # Higher low
-                        pass
-                prev_low = swing
-
-        # Now scan for BOS/CHoCH events using the candle data
-        # A BOS happens when a candle CLOSES beyond the last valid swing
+        # Track current assumed trend for CHoCH detection
         current_trend = TrendState.RANGING
 
-        # Track last significant swings
-        last_sh: Optional[SwingPoint] = None
-        last_sl: Optional[SwingPoint] = None
-
-        for _, swing in all_swings:
-            if swing.kind == "high":
-                last_sh = swing
-            else:
-                last_sl = swing
-
-        # Scan candles for structure breaks
-        for i in range(max(s.index for _, s in all_swings) + 1, n):
-            # Check if candle breaks above last swing high (bullish BOS)
-            if last_sh and closes[i] > last_sh.price:
-                if current_trend == TrendState.BEARISH:
-                    # CHoCH - first break against trend
-                    event_kind = StructureBreak.BULLISH_CHOCH
-                    current_trend = TrendState.BULLISH
-                else:
-                    event_kind = StructureBreak.BULLISH_BOS
+        # Check for breaks of swing highs (bullish BOS or bullish CHoCH)
+        for sh in swing_highs:
+            if not sh.valid:
+                continue
+            # Scan candles after the swing for a close above it
+            start = sh.index + self.right_bars + 1
+            for i in range(start, n):
+                if closes[i] > sh.price:
+                    ts = float(timestamps[i]) if timestamps is not None else 0.0
+                    # Determine if BOS or CHoCH
+                    if current_trend == TrendState.BEARISH:
+                        kind = StructureBreakType.BULLISH_CHOCH
+                    else:
+                        kind = StructureBreakType.BULLISH_BOS
                     current_trend = TrendState.BULLISH
 
-                disp = self._calc_displacement(opens, closes, highs, lows, i)
-                events.append(StructureEvent(
-                    kind=event_kind,
-                    index=i,
-                    price=float(closes[i]),
-                    swing_ref=last_sh,
-                    displacement=disp,
-                ))
-                last_sh.valid = False
-                last_sh.broken_at = i
+                    # Displacement of breaking candle
+                    body = abs(closes[i] - opens[i]) if i < len(closes) else 0
+                    avg_range = float(np.mean(highs[max(0, i-14):i] - lows[max(0, i-14):i])) if i > 14 else 1.0
+                    disp = body / max(avg_range, 1e-10)
 
-                # Find next swing high after this one
-                for _, s in all_swings:
-                    if s.kind == "high" and s.index > last_sh.index and s.valid:
-                        last_sh = s
-                        break
+                    events.append(StructureBreak(
+                        kind=kind, index=i, price=float(closes[i]),
+                        swing_broken=sh, displacement=disp, timestamp=ts,
+                    ))
+                    sh.valid = False
+                    sh.broken_at = i
+                    break
 
-            # Check if candle breaks below last swing low (bearish BOS)
-            if last_sl and closes[i] < last_sl.price:
-                if current_trend == TrendState.BULLISH:
-                    event_kind = StructureBreak.BEARISH_CHOCH
+        # Check for breaks of swing lows (bearish BOS or bearish CHoCH)
+        for sl in swing_lows:
+            if not sl.valid:
+                continue
+            start = sl.index + self.right_bars + 1
+            for i in range(start, n):
+                if closes[i] < sl.price:
+                    ts = float(timestamps[i]) if timestamps is not None else 0.0
+                    if current_trend == TrendState.BULLISH:
+                        kind = StructureBreakType.BEARISH_CHOCH
+                    else:
+                        kind = StructureBreakType.BEARISH_BOS
                     current_trend = TrendState.BEARISH
-                else:
-                    event_kind = StructureBreak.BEARISH_BOS
-                    current_trend = TrendState.BEARISH
 
-                disp = self._calc_displacement(opens, closes, highs, lows, i)
-                events.append(StructureEvent(
-                    kind=event_kind,
-                    index=i,
-                    price=float(closes[i]),
-                    swing_ref=last_sl,
-                    displacement=disp,
+                    body = abs(closes[i] - opens[i]) if i < len(closes) else 0
+                    avg_range = float(np.mean(highs[max(0, i-14):i] - lows[max(0, i-14):i])) if i > 14 else 1.0
+                    disp = body / max(avg_range, 1e-10)
+
+                    events.append(StructureBreak(
+                        kind=kind, index=i, price=float(closes[i]),
+                        swing_broken=sl, displacement=disp, timestamp=ts,
+                    ))
+                    sl.valid = False
+                    sl.broken_at = i
+                    break
+
+        # Sort events chronologically
+        events.sort(key=lambda e: e.index)
+        return events
+
+    def _determine_trend(
+        self, swing_highs: List[SwingPoint], swing_lows: List[SwingPoint],
+        events: List[StructureBreak],
+    ) -> TrendState:
+        """Determine current trend from structure events."""
+        if not events:
+            # Fallback: use swing classification
+            recent_highs = swing_highs[-3:] if swing_highs else []
+            recent_lows = swing_lows[-3:] if swing_lows else []
+            hh_count = sum(1 for s in recent_highs if s.classification == SwingType.HH)
+            ll_count = sum(1 for s in recent_lows if s.classification == SwingType.LL)
+            if hh_count >= 2:
+                return TrendState.BULLISH
+            if ll_count >= 2:
+                return TrendState.BEARISH
+            return TrendState.RANGING
+
+        # Use last structure event
+        last = events[-1]
+        if last.kind in (StructureBreakType.BULLISH_BOS, StructureBreakType.BULLISH_CHOCH):
+            return TrendState.BULLISH
+        if last.kind in (StructureBreakType.BEARISH_BOS, StructureBreakType.BEARISH_CHOCH):
+            return TrendState.BEARISH
+        return TrendState.RANGING
+
+    def _detect_displacements(
+        self, opens: np.ndarray, highs: np.ndarray, lows: np.ndarray,
+        closes: np.ndarray, atr: float, timestamps: Optional[np.ndarray],
+    ) -> List[Displacement]:
+        """Find displacement candles (impulsive moves)."""
+        disps = []
+        n = len(closes)
+        for i in range(1, n):
+            body = abs(float(closes[i]) - float(opens[i]))
+            total_range = float(highs[i]) - float(lows[i])
+            if total_range <= 0:
+                continue
+
+            body_atr_ratio = body / max(atr, 1e-10)
+            body_range_ratio = body / total_range
+
+            if body_atr_ratio >= self.min_displacement_atr and body_range_ratio >= self.min_body_ratio:
+                direction = "bullish" if closes[i] > opens[i] else "bearish"
+
+                # Check if creates FVG
+                creates_fvg = False
+                if i >= 2:
+                    if direction == "bullish" and float(lows[i]) > float(highs[i - 2]):
+                        creates_fvg = True
+                    elif direction == "bearish" and float(highs[i]) < float(lows[i - 2]):
+                        creates_fvg = True
+
+                disps.append(Displacement(
+                    index=i, direction=direction,
+                    body_size=body, body_atr_ratio=body_atr_ratio,
+                    body_range_ratio=body_range_ratio,
+                    creates_fvg=creates_fvg,
                 ))
-                last_sl.valid = False
-                last_sl.broken_at = i
+        return disps
 
-                for _, s in all_swings:
-                    if s.kind == "low" and s.index > last_sl.index and s.valid:
-                        last_sl = s
-                        break
+    @staticmethod
+    def _calc_atr(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, length: int = 14) -> float:
+        """Calculate current ATR value."""
+        n = len(highs)
+        if n < length + 1:
+            return float(np.mean(highs - lows)) if n > 0 else 0.001
 
-        # Final trend determination from events
-        if events:
-            last_event = events[-1]
-            if last_event.kind in (StructureBreak.BULLISH_BOS, StructureBreak.BULLISH_CHOCH):
-                current_trend = TrendState.BULLISH
-            elif last_event.kind in (StructureBreak.BEARISH_BOS, StructureBreak.BEARISH_CHOCH):
-                current_trend = TrendState.BEARISH
-
-        return current_trend, events
-
-    def _calc_displacement(
-        self,
-        opens: np.ndarray,
-        closes: np.ndarray,
-        highs: np.ndarray,
-        lows: np.ndarray,
-        idx: int,
-    ) -> float:
-        """Calculate displacement strength of the breaking candle.
-        
-        Displacement = body size / average range over last 14 bars.
-        Higher = more aggressive / institutional.
-        """
-        body = abs(float(closes[idx]) - float(opens[idx]))
-        # Average true range of last 14 bars
-        start = max(0, idx - 14)
-        ranges = highs[start:idx] - lows[start:idx]
-        avg_range = float(np.mean(ranges)) if len(ranges) > 0 else 1e-10
-        if avg_range <= 0:
-            avg_range = 1e-10
-        return body / avg_range
+        tr = np.maximum(
+            highs[1:] - lows[1:],
+            np.maximum(
+                np.abs(highs[1:] - closes[:-1]),
+                np.abs(lows[1:] - closes[:-1]),
+            ),
+        )
+        # Wilder smoothing
+        atr_val = float(np.mean(tr[-length:]))
+        return max(atr_val, 1e-10)
 
 
-# ─── Utility Functions ───────────────────────────────────────
+# ─── Utility ─────────────────────────────────────────────────
 
-def is_bullish_structure(state: StructureState) -> bool:
-    """Quick check if structure is bullish."""
-    return state.trend == TrendState.BULLISH
-
-
-def is_bearish_structure(state: StructureState) -> bool:
-    """Quick check if structure is bearish."""
-    return state.trend == TrendState.BEARISH
-
-
-def get_recent_bos(state: StructureState, lookback_bars: int = 20, current_idx: int = -1) -> Optional[StructureEvent]:
-    """Get the most recent BOS within lookback window."""
+def get_recent_choch(state: StructureState, max_bars_ago: int = 20, current_idx: int = -1) -> Optional[StructureBreak]:
+    """Get most recent CHoCH within lookback."""
     for event in reversed(state.events):
-        if current_idx > 0 and (current_idx - event.index) > lookback_bars:
+        if current_idx > 0 and (current_idx - event.index) > max_bars_ago:
             break
-        if event.kind in (StructureBreak.BULLISH_BOS, StructureBreak.BEARISH_BOS):
+        if event.kind in (StructureBreakType.BULLISH_CHOCH, StructureBreakType.BEARISH_CHOCH):
             return event
     return None
 
 
-def get_recent_choch(state: StructureState, lookback_bars: int = 20, current_idx: int = -1) -> Optional[StructureEvent]:
-    """Get the most recent CHoCH within lookback window."""
+def get_recent_bos(state: StructureState, max_bars_ago: int = 20, current_idx: int = -1) -> Optional[StructureBreak]:
+    """Get most recent BOS within lookback."""
     for event in reversed(state.events):
-        if current_idx > 0 and (current_idx - event.index) > lookback_bars:
+        if current_idx > 0 and (current_idx - event.index) > max_bars_ago:
             break
-        if event.kind in (StructureBreak.BULLISH_CHOCH, StructureBreak.BEARISH_CHOCH):
+        if event.kind in (StructureBreakType.BULLISH_BOS, StructureBreakType.BEARISH_BOS):
             return event
+    return None
+
+
+def get_recent_displacement(state: StructureState, direction: str, max_bars_ago: int = 10, current_idx: int = -1) -> Optional[Displacement]:
+    """Get most recent displacement in given direction."""
+    for disp in reversed(state.displacements):
+        if current_idx > 0 and (current_idx - disp.index) > max_bars_ago:
+            break
+        if disp.direction == direction:
+            return disp
     return None

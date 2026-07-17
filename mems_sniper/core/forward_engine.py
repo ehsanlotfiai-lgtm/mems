@@ -144,6 +144,8 @@ class ForwardEngine:
             self._tasks.append(
                 asyncio.create_task(self._ws_loop(ex_name, symbols, self.s.trigger_timeframe))
             )
+        # REST-based signal polling as fallback (in case WS doesn't fire)
+        self._tasks.append(asyncio.create_task(self._signal_poll_loop()))
         # Prune ticks periodically
         self._tasks.append(asyncio.create_task(self._tick_prune_loop()))
         # DEX layer — poll Pump.fun / Raydium / PancakeSwap / Uniswap
@@ -553,6 +555,98 @@ class ForwardEngine:
                 logger.debug(f"PriceChecker loop error: {exc}")
             try:
                 await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                break
+
+    # ---------------------------------------------------- signal poll loop (REST fallback)
+    async def _signal_poll_loop(self) -> None:
+        """REST-based polling for main signals as WS fallback.
+        
+        Evaluates top futures symbols every 5 minutes using the ConfluenceEngine.
+        This ensures signals are generated even if WS connection fails.
+        """
+        await asyncio.sleep(60)  # Wait for exchange to be ready
+        poll_interval = float(self.s.forward.get("poll_interval_seconds", 300))
+
+        while not self.stop_event.is_set():
+            try:
+                em = self.em
+                if not em.clients:
+                    await asyncio.sleep(30)
+                    continue
+
+                # Get symbols from universe (CEX futures only)
+                all_symbols: List[SymbolInfo] = []
+                for ex_name, sym_list in self.universes.items():
+                    for info in sym_list:
+                        all_symbols.append(info)
+                        if len(all_symbols) >= 100:
+                            break
+                    if len(all_symbols) >= 100:
+                        break
+
+                if not all_symbols:
+                    logger.warning("Signal poll: no symbols in universe — retrying in 60s")
+                    await asyncio.sleep(60)
+                    continue
+
+                evaluated = 0
+                signals_found = 0
+                for info in all_symbols[:50]:  # Evaluate top 50 per cycle
+                    if self.stop_event.is_set():
+                        break
+                    now = time.time()
+                    if now - self._signal_cooldowns.get(info.symbol, 0) < self._signal_cooldown_seconds:
+                        continue
+
+                    evaluated += 1
+                    # Fetch candles for all configured TFs
+                    for tf in self.s.timeframes:
+                        cached = self.store.get("binance", info.symbol, tf)
+                        if len(cached) < 30:
+                            try:
+                                fresh = await em.fetch_ohlcv("binance", info.symbol, tf, limit=200)
+                                for c in fresh:
+                                    self.store.push("binance", info.symbol, tf, c)
+                            except Exception:
+                                pass
+
+                    try:
+                        sig = await self.confluence.evaluate_symbol("binance", info)
+                    except Exception as exc:
+                        logger.debug(f"Signal poll error {info.symbol}: {exc}")
+                        continue
+
+                    if sig is None:
+                        continue
+
+                    await self.storage.save_signal(sig)
+                    self._signal_cooldowns[info.symbol] = time.time()
+                    signals_found += 1
+                    logger.info(f"SIGNAL (poll) {sig.exchange} {sig.symbol} {sig.side.value} score={sig.score:.2f}")
+
+                    pos = self.risk.open_from_signal(sig)
+                    if pos is not None:
+                        await self.storage.open_paper(pos, signal_id=sig.id)
+                        self._emit_dashboard({"type": "signal_opened", "signal": sig.to_dict(), "position": pos.to_dict()})
+
+                    if self.notify is not None:
+                        try:
+                            await self.notify.send_signal(sig)
+                        except Exception:
+                            pass
+
+                    await asyncio.sleep(0.2)
+
+                if evaluated > 0:
+                    logger.info(f"Signal poll cycle: evaluated={evaluated}, signals={signals_found}")
+
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.exception(f"Signal poll loop error: {exc}")
+            try:
+                await asyncio.sleep(poll_interval)
             except asyncio.CancelledError:
                 break
 
