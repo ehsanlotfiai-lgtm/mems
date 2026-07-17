@@ -22,7 +22,7 @@ exchanges:
     options:
       defaultType: "future"   # futures mode — leverage trading
     watch_symbols_mode: "top_volume"   # only top coins by volume
-    top_volume_limit: 200     # top 200 Binance futures coins
+    top_volume_limit: 100     # top 100 Binance futures coins
     custom_symbols: []
     ws_endpoint: "wss://fstream.binance.com/ws"
 
@@ -37,41 +37,29 @@ exchanges:
     ws_endpoint: "wss://stream.bybit.com/v5/public/spot"
 
 # ------------------------------------------------------------
-# DEX (decentralized exchanges) — where meme coins appear FIRST,
-# before they reach CEXes. Highest-alpha discovery layer.
+# DEX (decentralized exchanges)
 # ------------------------------------------------------------
 dex:
   enabled: true
-  # Which DEX platforms to scan
   enabled_dexes:
-    - "pumpfun"        # Solana launchpad — freshest meme coins
-    - "raydium"        # Solana main DEX
-    - "pancakeswap"    # BNB Chain DEX
-    - "uniswap"        # Ethereum DEX
-  # Which chains to scan
+    - "pumpfun"
+    - "raydium"
+    - "pancakeswap"
+    - "uniswap"
   enabled_chains:
     - "solana"
     - "bsc"
     - "ethereum"
-  # Minimum liquidity (USD) for a token to be watchable.
-  # Pump.fun brand-new tokens bypass this.
   min_liquidity_usd: 10_000
-  # Minimum 1h volume (USD) — tokens older than 1h must have this.
   min_volume_1h_usd: 1_000
-  # Maximum token age (hours) — we focus on fresh launches.
   max_age_hours: 24
-  # How often to re-discover DEX universe (minutes).
   discovery_interval_minutes: 5
-  # How often to poll live prices for watched DEX tokens (seconds).
   price_poll_interval_seconds: 30
-  # Maximum number of DEX tokens to track simultaneously.
   max_tracked_tokens: 200
-  # Meme keyword filter for DEX search (empty = accept all fresh tokens)
   meme_keywords: []
 
-# Universe filter — only trade symbols that look like "meme-ish"
+# Universe filter
 universe:
-  # Include symbols whose base asset keywords / name contains these.
   meme_keywords:
     - "DOGE"
     - "SHIB"
@@ -83,70 +71,59 @@ universe:
     - "TURBO"
     - "NEIRO"
     - "BOOK"
-  # Also auto-include any USDT pair listed in last N hours (new-listing sniper).
   include_new_listed_hours: 72
-  # Minimum 24h quote volume (USDT) to be considered liquid enough.
   min_quote_volume_24h: 1_000_000
-  # Maximum 24h quote volume (USDT) -- avoid huge caps if you want early-stage meme.
   max_quote_volume_24h: 500_000_000
-  # Only include symbols with perpetual futures available (for leverage trading)
   futures_only: true
-  # How many top futures coins to track (by volume) — top 200 Binance futures
-  futures_universe_size: 200
+  # ── سیگنال‌ها فقط روی ۱۰۰ ارز پرحجم فیوچرز ──
+  futures_universe_size: 100
 
 # ------------------------------------------------------------
-# Multi-timeframe confluence — سیگنال‌های تایم بالا (کم‌نویز)
-# تایم‌فریم‌های ۱ ساعته تا ۴ ساعته برای سیگنال‌های با وین ریت بالا
+# Multi-timeframe confluence — سیگنال‌های ساعتی با وین ریت بالا
+# تایم‌فریم‌های ۱h + ۴h برای تأیید روند
 # ------------------------------------------------------------
 timeframes:
   - "1h"
-  - "2h"
   - "4h"
 
-# Which timeframe is the "trigger" (entry signal) — 2h for balanced noise/speed.
-trigger_timeframe: "2h"
+# trigger = 1h برای سیگنال‌های ساعتی
+trigger_timeframe: "1h"
 
-# Weight of each timeframe in the confluence score (sum = 1.0)
+# Weight of each timeframe in the confluence score
 confluence_weights:
-  "1h": 0.30
-  "2h": 0.45
-  "4h": 0.25
+  "1h": 0.60
+  "4h": 0.40
 
 # ------------------------------------------------------------
-# Strategy parameters (the 8 hunting methods).
-# Values are tuned defaults; tweak per exchange / regime.
+# Strategy parameters
 # ------------------------------------------------------------
 strategies:
   new_listing_sniper:
     enabled: true
-    # Candle age of the symbol must be < this (hours) to trigger.
     max_age_hours: 72
-    # First candle must close >= threshold above open.
     first_candle_min_pct: 5.0
-    weight: 1.5      # extra weight: new listings are highest-alpha
+    weight: 1.5
 
   volume_spike:
     enabled: true
-    # Volume must be >= N * rolling mean (rolling window in candles).
     multiplier: 3.0
     rolling_window: 20
     weight: 1.0
 
   orderbook_imbalance:
     enabled: true
-    # Best bid volume / best ask volume ratio threshold (and vice versa for short).
     bid_ask_ratio_threshold: 2.2
     depth_levels: 20
     weight: 1.0
 
   liquidity_grab:
-    enabled: false    # OFF: 0.2% wick pierce = noise territory
+    enabled: false
     swing_lookback: 50
     wick_pierce_pct: 0.2
     weight: 1.0
 
   momentum_ignition:
-    enabled: false    # OFF: 4%+2% bodies fire too easily on volatile assets
+    enabled: false
     first_body_min_pct: 4.0
     confirm_body_min_pct: 2.0
     weight: 1.0
@@ -154,7 +131,6 @@ strategies:
   rsi_divergence:
     enabled: true
     rsi_length: 14
-    # Bullish divergence: price lower low, RSI higher low.
     lookback: 50
     weight: 0.8
 
@@ -162,18 +138,17 @@ strategies:
     enabled: true
     bb_length: 20
     bb_std: 2.0
-    # Close must be above upper band by this % to count.
     breakout_buffer_pct: 0.1
     weight: 0.8
 
-  funding_oi_spike:   # only used when futures symbols available
+  funding_oi_spike:
     enabled: true
-    funding_change_threshold: 0.0005   # 0.05%
+    funding_change_threshold: 0.0005
     oi_spike_multiplier: 1.5
     weight: 1.0
 
   social_momentum:
-    enabled: false    # enable when social tracking is configured
+    enabled: false
     min_momentum: 0.4
     min_mentions: 10
     weight: 0.8
@@ -198,12 +173,12 @@ strategies:
     weight: 0.9
 
   vwap:
-    enabled: false    # OFF: 0.5% deviation fires almost always in trending markets
+    enabled: false
     deviation_pct: 0.5
     weight: 0.8
 
   macd_crossover:
-    enabled: false    # OFF: too many false signals on lower TFs
+    enabled: true
     fast: 12
     slow: 26
     signal: 9
@@ -218,12 +193,12 @@ strategies:
     weight: 1.0
 
   obv_divergence:
-    enabled: false    # OFF: OBV slope 0.05 threshold matches noise on low TFs
+    enabled: false
     length: 20
     weight: 0.9
 
   sr_bounce:
-    enabled: false    # OFF: 1.5% proximity fires too often on choppy markets
+    enabled: true
     lookback: 30
     threshold_pct: 1.5
     weight: 1.1
@@ -239,55 +214,43 @@ strategies:
     enabled: true
     weight: 1.2
 
-# Minimum weighted confidence score in [0,1] to publish a signal — higher for HTF signals.
-min_signal_score: 0.72
+# امتیاز حداقل برای فیوچرز ساعتی — بالا برای وین ریت بهتر
+min_signal_score: 0.68
 
 # ------------------------------------------------------------
-# Risk management (used by paper trading for纸上 trade simulation).
+# Risk management
 # ------------------------------------------------------------
 risk:
-  # Fraction of paper-equity to risk per trade.
   risk_per_trade_pct: 1.0
-  # Initial paper balance (USDT).
   initial_paper_balance: 10000.0
-  # Stop-loss / take-profit multipliers of ATR(14) — tuned for HTF signals
   atr_length: 14
   stop_loss_atr_mult: 1.5
   take_profit_atr_mult: 2.5
-  # Multi-TP levels (ATR multipliers)
-  tp1_atr_mult: 1.0         # TP1 — risk-free after hit (SL → breakeven)
-  tp2_atr_mult: 1.8         # TP2 — partial close (50%)
-  tp3_atr_mult: 2.5         # TP3 — full close (remaining)
-  risk_free_after_tp1: true  # Move SL to breakeven after TP1
-  # Trailing stop activation: once price moves +X*ATR, trail by trailing_atr_mult.
+  tp1_atr_mult: 1.0
+  tp2_atr_mult: 1.8
+  tp3_atr_mult: 2.5
+  risk_free_after_tp1: true
   trailing_activate_atr_mult: 1.5
   trailing_atr_mult: 0.8
-  # Max simultaneously open paper positions.
   max_open_positions: 4
-  # Hard daily loss limit (% of equity) -> stops opening new trades that day.
   daily_max_loss_pct: 5.0
-  # Time-based exit: close positions older than this (seconds) if no TP/SL hit.
-  max_position_age_seconds: 7200
+  max_position_age_seconds: 14400   # 4h برای سیگنال‌های ساعتی
 
 # ------------------------------------------------------------
 # Backtest
 # ------------------------------------------------------------
 backtest:
-  # Candles of history to pull per timeframe for the test.
   history_candles: 2000
-  fee_pct: 0.075      # taker fee %
+  fee_pct: 0.075
   slippage_pct: 0.05
 
 # ------------------------------------------------------------
 # Forward / live paper-trading
 # ------------------------------------------------------------
 forward:
-  # Re-evaluate universe every N minutes.
   universe_refresh_minutes: 15
-  # Poll closed candles every N seconds (in addition to WS).
   poll_interval_seconds: 30
-  # Signal cooldown — prevent same symbol from firing again within N seconds.
-  signal_cooldown_seconds: 3600  # 1 hour (HTF signals need longer cooldown)
+  signal_cooldown_seconds: 3600
 
 # ------------------------------------------------------------
 # Web dashboard
@@ -296,21 +259,20 @@ web:
   host: "0.0.0.0"
   port: 8080
   cors_origins: ["*"]
-  # Simple token-guard for the dashboard (set in .env WEB_AUTH_TOKEN).
   require_token: false
 
 # ------------------------------------------------------------
 # Telegram notifications
 # ------------------------------------------------------------
 telegram:
-  enabled: false     # set true and fill .env
+  enabled: false
   parse_mode: "HTML"
 
 # ------------------------------------------------------------
-# Social momentum tracking (Twitter / Telegram scraping)
+# Social momentum tracking
 # ------------------------------------------------------------
 social:
-  enabled: false     # set true to activate social tracking
+  enabled: false
   scan_interval_minutes: 30
   max_symbols: 20
   nitter_instances:
@@ -318,18 +280,18 @@ social:
     - "https://nitter.poast.org"
 
 # ------------------------------------------------------------
-# Fundamentals — تحلیل بنیادی و اخبار
+# Fundamentals
 # ------------------------------------------------------------
 fundamentals:
   enabled: true
   fear_greed_url: "https://api.alternative.me/fng/?limit=2"
   coingecko_trending_url: "https://api.coingecko.com/api/v3/search/trending"
-  scan_interval_seconds: 300       # هر ۵ دقیقه رفرش
-  fear_greed_weight: 0.15          # وزن Fear&Greed در امتیاز سیگنال
-  trending_boost: 0.10             # بونوس توکن‌های trending CoinGecko
+  scan_interval_seconds: 300
+  fear_greed_weight: 0.15
+  trending_boost: 0.10
 
 # ------------------------------------------------------------
-# Parquet data logger (offline analysis)
+# Parquet data logger
 # ------------------------------------------------------------
 parquet:
   enabled: true
@@ -342,26 +304,22 @@ meme_hunter:
   enabled: true
   scan_interval_seconds: 30
 
-  # Strategy 1: Pre-Pump Hunter (شکار قبل از پامپ)
-  pre_pump_max_age_seconds: 1800        # 30 min — max token age to consider
-  pre_pump_min_volume_growth: 1.5       # volume must grow 1.5x vs hourly avg
+  pre_pump_max_age_seconds: 1800
+  pre_pump_min_volume_growth: 1.5
   pre_pump_min_holder_growth: 1.2
-  pre_pump_max_dev_pct: 20.0            # dev wallet can hold max 20% (stricter)
-  pre_pump_min_liquidity_usd: 3000      # higher liquidity filter (was 1000)
+  pre_pump_max_dev_pct: 20.0
+  pre_pump_min_liquidity_usd: 3000
   pre_pump_requires_locked_liq: false
 
-  # Strategy 2: Post-Migration Hunter (خرید بعد از Migration)
-  post_migration_min_age_seconds: 3600  # at least 1 hour since launch
-  post_migration_max_age_seconds: 86400 # max 24 hours
-  post_migration_min_volume_1h: 10000   # higher volume filter (was 5000)
-  post_migration_min_liquidity: 15000   # higher liquidity filter (was 5000)
-  post_migration_min_txns_1h: 50        # higher txn filter (was 20)
+  post_migration_min_age_seconds: 3600
+  post_migration_max_age_seconds: 86400
+  post_migration_min_volume_1h: 10000
+  post_migration_min_liquidity: 15000
+  post_migration_min_txns_1h: 50
 
-  # Strategy 3: Smart Money Tracker (دنبال‌کردن Smart Money)
   smart_money_min_wallets: 2
   smart_money_known_wallets: []
 
-  # Strategy 4: Narrative Hunter (شکار روایت‌ها)
   narrative_keywords:
     - "AI"
     - "GROK"
@@ -382,46 +340,48 @@ meme_hunter:
     - "GIGA"
   narrative_min_score: 0.50
 
-  # General
   max_results_per_strategy: 10
 
 # ------------------------------------------------------------
-# Scalping — اسکلپ روی ارزهای پرحجم بازار
+# Scalping — اسکلپ روی ۲۰۰ ارز برتر — spot + futures — 5m
 # ------------------------------------------------------------
 scalping:
   enabled: true
-  # Only scan top N high-volume coins (Binance + Bybit)
-  top_volume_limit: 30
-  # Timeframes — only short TFs for scalping
+  # اسکن روی ۲۰۰ ارز برتر به جای ۳۰
+  top_volume_limit: 200
+  # تایم‌فریم پایین برای اسکلپ
   timeframes:
-    - "1m"
     - "5m"
-  trigger_timeframe: "1m"
+    - "15m"
+  trigger_timeframe: "5m"
   # Confluence weights
   confluence_weights:
-    "1m": 0.60
-    "5m": 0.40
-  # Minimum score to emit scalp signal
-  min_signal_score: 0.35
-  # Tight SL/TP for quick profit-taking
-  sl_atr_mult: 1.0
-  tp_atr_mult: 1.8
-  atr_length: 14
-  # Signal cooldown (seconds) — faster than regular signals
-  signal_cooldown_seconds: 300   # 5 min
-  # Risk per scalp trade
+    "5m": 0.65
+    "15m": 0.35
+  # امتیاز کمتر برای بیشتر سیگنال دادن در اسکلپ
+  min_signal_score: 0.30
+  # SL/TP تنگ برای اسکلپ
+  sl_atr_mult: 0.8
+  tp_atr_mult: 1.5
+  atr_length: 7
+  # cooldown کوتاه برای اسکلپ
+  signal_cooldown_seconds: 180   # 3 دقیقه
+  # ریسک کوچک در اسکلپ
   risk_per_trade_pct: 0.5
-  # Max open scalp positions
-  max_open_positions: 3
-  # Minimum unique strategies required to emit a signal
-  min_unique_strategies: 1
-  # Minimum volume ratio vs 20-period average to allow signal
-  min_volume_ratio: 1.0
-  # Higher timeframe trend filter
+  # پوزیشن‌های همزمان
+  max_open_positions: 6
+  # حداقل استراتژی‌های مختلف برای سیگنال
+  min_unique_strategies: 2
+  # فیلتر حجم
+  min_volume_ratio: 1.2
+  # HTF filter خاموش — برای هر دو جهت سیگنال بده
   use_htf_trend_filter: false
   htf_timeframes:
+    - "1h"
     - "4h"
-    - "1d"
+  # spot و futures هر دو — از Binance spot + futures
+  include_spot: true
+  include_futures: true
 
   strategies:
     scalp_vwap_rejection:
@@ -438,8 +398,8 @@ scalping:
     scalp_momentum_burst:
       enabled: true
       weight: 1.0
-      body_min_pct: 0.4
-      volume_multiplier: 2.5
+      body_min_pct: 0.3
+      volume_multiplier: 2.0
     scalp_stoch_extreme:
       enabled: true
       weight: 1.0
@@ -461,12 +421,12 @@ scalping:
     scalp_volume_climax:
       enabled: true
       weight: 1.1
-      volume_multiplier: 5.0
+      volume_multiplier: 4.0
     scalp_order_flow:
       enabled: true
       weight: 1.0
       depth_levels: 10
-      imbalance_threshold: 3.0
+      imbalance_threshold: 2.5
     scalp_squeeze_release:
       enabled: true
       weight: 1.0
@@ -478,47 +438,33 @@ scalping:
 # Assistant
 # ------------------------------------------------------------
 assistant:
-  # Default suggestiveness: how chatty the in-dashboard assistant is.
-  verbosity: "normal"   # quiet | normal | verbose
-  # Risk-phrase triggers that auto-warn in assistant.
+  verbosity: "normal"
   risk_warn_drawdown_pct: 3.0
-  # LLM upgrade (optional — uses OpenAI-compatible API)
   use_llm: false
   llm_model: "gpt-4o-mini"
   llm_max_tokens: 500
   llm_temperature: 0.7
-  # llm_api_key and llm_base_url are in .env
 
 # =============================================================
 # LIT (Liquidity Inducement Theorem) Strategy Engine
-# Separate section — top 20 crypto + gold + oil + Dow Jones
 # =============================================================
 lit:
   enabled: true
-  # Universe: top N crypto by volume + special instruments
   universe_size: 20
-  # Special symbols (available as futures on Binance)
   special_symbols:
-    - "PAXG/USDT"       # Gold proxy on Binance
-    # Oil and Dow Jones not available on Binance — use DEX or skip
-  # Timeframes for LIT analysis
+    - "PAXG/USDT"
   timeframes:
-    - "15m"       # Trigger TF
-    - "1h"        # Structure TF
-    - "4h"        # HTF bias
+    - "15m"
+    - "1h"
+    - "4h"
   trigger_timeframe: "15m"
-  # Risk management
   sl_atr_mult: 1.0
   tp_atr_mult: 2.0
   tp2_atr_mult: 3.0
   risk_per_trade_pct: 1.0
   initial_balance: 10000
   max_hold_bars: 50
-  # Minimum signal score
   min_score: 0.70
-  # Signal cooldown
-  cooldown_seconds: 1800   # 15 min
-  # Max open LIT positions
+  cooldown_seconds: 1800
   max_open_positions: 3
-  # Evaluation interval
   evaluation_interval_seconds: 300
