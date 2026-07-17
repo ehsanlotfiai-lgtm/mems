@@ -568,35 +568,7 @@ class ScalpEngulfing(BaseScalpStrategy):
         return None
 
 
-# ==========================================================
-# Registry
-# ==========================================================
-SCALP_STRATEGY_REGISTRY = {
-    "scalp_vwap_rejection": ScalpVWAPRejection,
-    "scalp_rsi_extreme": ScalpRSIExtreme,
-    "scalp_momentum_burst": ScalpMomentumBurst,
-    "scalp_stoch_extreme": ScalpStochasticExtreme,
-    "scalp_ema_ribbon": ScalpEMARibbon,
-    "scalp_bb_touch": ScalpBBTouch,
-    "scalp_volume_climax": ScalpVolumeClimax,
-    "scalp_order_flow": ScalpOrderFlowImbalance,
-    "scalp_squeeze_release": ScalpSqueezeRelease,
-    "scalp_engulfing": ScalpEngulfing,
-    "scalp_micromap": ScalpMicroMap,
-    "scalp_pro_btb": ScalpProBTB,
-    "scalp_sp2l": ScalpSP2L,
-}
-
-
-def build_scalp_strategies(strategy_params: Dict[str, Dict[str, Any]]) -> list:
-    """Instantiate all enabled scalping strategies from config."""
-    out = []
-    for name, cls in SCALP_STRATEGY_REGISTRY.items():
-        params = strategy_params.get(name, {}) or {}
-        instance = cls(params)
-        if instance.enabled:
-            out.append(instance)
-    return out
+# (Registry moved to end of file — after all class definitions)
 
 
 
@@ -963,3 +935,35 @@ class ScalpSP2L(BaseScalpStrategy):
             if count >= min_bars:
                 return (start, start + count - 1)
         return None
+
+
+
+# ==========================================================
+# Registry (MUST be at end of file — after all class definitions)
+# ==========================================================
+SCALP_STRATEGY_REGISTRY = {
+    "scalp_vwap_rejection": ScalpVWAPRejection,
+    "scalp_rsi_extreme": ScalpRSIExtreme,
+    "scalp_momentum_burst": ScalpMomentumBurst,
+    "scalp_stoch_extreme": ScalpStochasticExtreme,
+    "scalp_ema_ribbon": ScalpEMARibbon,
+    "scalp_bb_touch": ScalpBBTouch,
+    "scalp_volume_climax": ScalpVolumeClimax,
+    "scalp_order_flow": ScalpOrderFlowImbalance,
+    "scalp_squeeze_release": ScalpSqueezeRelease,
+    "scalp_engulfing": ScalpEngulfing,
+    "scalp_micromap": ScalpMicroMap,
+    "scalp_pro_btb": ScalpProBTB,
+    "scalp_sp2l": ScalpSP2L,
+}
+
+
+def build_scalp_strategies(strategy_params: Dict[str, Dict[str, Any]]) -> list:
+    """Instantiate all enabled scalping strategies from config."""
+    out = []
+    for name, cls in SCALP_STRATEGY_REGISTRY.items():
+        params = strategy_params.get(name, {}) or {}
+        instance = cls(params)
+        if instance.enabled:
+            out.append(instance)
+    return out
