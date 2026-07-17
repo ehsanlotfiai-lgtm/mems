@@ -448,25 +448,65 @@ assistant:
   llm_temperature: 0.7
 
 # =============================================================
-# LIT (Liquidity Inducement Theorem) Strategy Engine
+# LIT v2 (Liquidity Inducement Theorem) — 5-Layer Architecture
+# =============================================================
+# Setups: Sweep-Reversal | Inducement-Continuation | Range-to-Expansion
+# Layers: Structure → Liquidity → Setups → Risk → Score
+# Rule: NO ENTRY without HTF bias alignment
 # =============================================================
 lit:
   enabled: true
   universe_size: 20
   special_symbols:
     - "PAXG/USDT"
+
+  # ── Timeframes ──
+  # Bias: 1h + 4h | Setup detection: 15m | Trigger: 5m
   timeframes:
+    - "5m"
     - "15m"
     - "1h"
     - "4h"
   trigger_timeframe: "15m"
-  sl_atr_mult: 1.0
-  tp_atr_mult: 2.0
-  tp2_atr_mult: 3.0
-  risk_per_trade_pct: 1.0
-  initial_balance: 10000
-  max_hold_bars: 50
-  min_score: 0.70
-  cooldown_seconds: 1800
-  max_open_positions: 3
-  evaluation_interval_seconds: 300
+  htf_timeframe: "1h"        # HTF for bias determination
+  htf_timeframe_2: "4h"      # Secondary HTF confirmation
+
+  # ── Structure Engine (Layer 1) ──
+  swing_lookback: 5           # bars on each side to confirm swing
+  min_swing_distance: 3       # minimum bars between swings
+
+  # ── Liquidity Engine (Layer 2) ──
+  equal_tolerance_pct: 0.08   # % tolerance for equal highs/lows
+  min_touches: 2              # minimum touches to form liquidity pool
+  sweep_min_wick_atr: 0.3     # minimum wick depth (ATR) for sweep
+  strong_sweep_wick_atr: 0.7  # wick depth for "strong" sweep quality
+
+  # ── Setups (Layer 3) ──
+  setups:
+    range_min_bars: 15          # minimum bars to identify range
+    compression_threshold: 0.6  # max close std/range for compression
+
+  # ── Risk Engine (Layer 4) ──
+  risk_per_trade_pct: 1.0     # max risk % per trade (0.5-1.0 recommended)
+  min_rr: 2.0                 # minimum Risk:Reward ratio (reject below)
+  initial_balance: 10000      # paper balance for sizing
+  sl_buffer_atr: 0.2          # extra ATR buffer beyond structural SL
+  sl_atr_mult: 1.0            # fallback SL = 1.0x ATR (legacy compat)
+  tp_atr_mult: 2.0            # fallback TP1 (legacy compat)
+  tp2_atr_mult: 3.0           # fallback TP2 (legacy compat)
+
+  # ── Score Engine (Layer 5) ──
+  min_score: 0.60             # minimum overall score to emit signal
+  scoring:
+    w_htf: 0.25               # weight: HTF alignment
+    w_sweep: 0.25             # weight: sweep quality
+    w_confirmation: 0.20      # weight: entry confirmation
+    w_structure: 0.15         # weight: structure clarity
+    w_rr: 0.10                # weight: R:R quality
+    w_target: 0.05            # weight: liquidity target clarity
+
+  # ── Execution ──
+  max_hold_bars: 50           # max bars to hold position
+  cooldown_seconds: 1800      # cooldown between signals per symbol
+  max_open_positions: 3       # max concurrent LIT positions
+  evaluation_interval_seconds: 300  # seconds between evaluations
