@@ -19,7 +19,7 @@ import asyncio
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from typing import Awaitable, Callable, Deque, Dict, List, Optional, Set
+from typing import Any, Awaitable, Callable, Deque, Dict, List, Optional, Set
 
 import pandas as pd
 
@@ -87,6 +87,9 @@ class ForwardEngine:
         )
         self.stop_event = asyncio.Event()
         self._tasks: List[asyncio.Task] = []
+        # — per-instance callback lists (fix: avoid class-level shared state) —
+        self._dashboard_callbacks: List[Callable[[dict], Awaitable[None]]] = []
+        self._universe_callbacks: List[Callable[[dict], Awaitable[None]]] = []
         # last evaluated candles per (exchange, symbol, tf) to avoid re-evaluating
         self.last_eval_ts: Dict[str, int] = {}
         self.last_universe_refresh = 0.0
@@ -99,14 +102,14 @@ class ForwardEngine:
         self._dex_candle_cache_ts: Dict[str, float] = {}  # "chain|pair|tf" -> last REST refresh time
         # Signal cooldown — prevent same symbol from firing again within N seconds
         self._signal_cooldowns: Dict[str, float] = {}  # symbol -> last_signal_timestamp
-        self._signal_cooldown_seconds: float = float(settings.forward.get("signal_cooldown_seconds", 1800))  # 30 min default
+        self._signal_cooldown_seconds: float = float(settings.forward.get("signal_cooldown_seconds", 3600))
         # News/Fundamentals tracker
         self.news_tracker: Optional[Any] = None
         self._news_score_cache: Dict[str, Any] = {}
-        # Meme hunter (۴ استراتژی شکار میم‌کوین)
+        # Meme hunter (۱۰ استراتژی شکار میم‌کوین)
         self.meme_hunter_enabled = bool(settings.meme_hunter.get("enabled", True))
         self.meme_hunter: Optional[MemeHunter] = None
-        self.meme_hunter_results: Dict[str, Any] = {}  # latest scan results
+        self.meme_hunter_results: Dict[str, Any] = {}
 
     # ---------------------------------------------------- public lifecycle
     async def start(self) -> None:
@@ -149,7 +152,7 @@ class ForwardEngine:
             self._tasks.append(asyncio.create_task(self._dex_discovery_loop()))
             self._tasks.append(asyncio.create_task(self._dex_snipe_loop()))
             logger.info("DEX layer enabled (Pump.fun / Raydium / PancakeSwap / Uniswap)")
-        # Meme Hunter — ۴ استراتژی شکار میم‌کوین
+        # Meme Hunter — ۱۰ استراتژی شکار میم‌کوین
         if self.meme_hunter_enabled and self.dex_enabled:
             self.meme_hunter = get_meme_hunter(self.s.meme_hunter)
             self._tasks.append(asyncio.create_task(self._meme_hunter_loop()))
@@ -163,7 +166,7 @@ class ForwardEngine:
             )
             self._scalp_cooldowns: Dict[str, float] = {}
             self._tasks.append(asyncio.create_task(self._scalp_loop()))
-            logger.info("ScalpingEngine enabled: 10 strategies on high-volume coins")
+            logger.info("ScalpingEngine enabled: 10 strategies on top 200 coins (spot+futures)")
         # LIT Engine — استراتژی Liquidity Inducement
         self.lit_enabled = bool(self.s.raw.get("lit", {}).get("enabled", False))
         if self.lit_enabled:
@@ -191,7 +194,6 @@ class ForwardEngine:
         """Provide news/sentiment data to the strategy engine."""
         if not self.news_tracker:
             return {}
-        # Refresh news data if stale
         try:
             await self.news_tracker.refresh()
         except Exception:  # noqa: BLE001
@@ -199,7 +201,6 @@ class ForwardEngine:
         score_dict = self.news_tracker.get_dict()
         if not score_dict:
             return {}
-        # Check if this symbol is trending
         is_trending = self.news_tracker.is_trending(symbol.split("/")[0] if "/" in symbol else symbol)
         result = {"fundamental_score": score_dict}
         if is_trending:
@@ -207,10 +208,10 @@ class ForwardEngine:
         return result
 
     async def _scalp_candle_provider(self, exchange: str, symbol: str) -> Dict[str, List[Candle]]:
-        """Candle provider for scalping engine — returns scalp TFs (1m, 5m) + HTF TFs (4h, 1d)."""
+        """Candle provider for scalping engine — returns scalp TFs (5m, 15m) + HTF TFs (1h, 4h)."""
         out: Dict[str, List[Candle]] = {}
-        scalp_tfs = set(self.s.scalping.get("timeframes", ["1m", "5m"]))
-        htf_tfs = set(self.s.scalping.get("htf_timeframes", ["4h", "1d"]))
+        scalp_tfs = set(self.s.scalping.get("timeframes", ["5m", "15m"]))
+        htf_tfs = set(self.s.scalping.get("htf_timeframes", ["1h", "4h"]))
         all_tfs = scalp_tfs | htf_tfs
         for tf in all_tfs:
             cached = self.store.get(exchange, symbol, tf)
@@ -228,13 +229,11 @@ class ForwardEngine:
     async def _candle_provider(self, exchange: str, symbol: str) -> Dict[str, List[Candle]]:
         if symbol.startswith("DEX:"):
             return await self._dex_candle_provider(exchange, symbol)
-        # If memory empty (cold start), fetch via REST once.
         tfs = self.s.timeframes
         out: Dict[str, List[Candle]] = {}
         for tf in tfs:
             cached = self.store.get(exchange, symbol, tf)
             if len(cached) < 30:
-                # bootstrap with REST
                 try:
                     fresh = await self.em.fetch_ohlcv(exchange, symbol, tf, limit=500)
                     for c in fresh:
@@ -246,12 +245,6 @@ class ForwardEngine:
         return out
 
     async def _dex_candle_provider(self, exchange: str, symbol: str) -> Dict[str, List[Candle]]:
-        """Candle source for synthetic `DEX:{chain}:{address}` symbols.
-
-        DEX tokens have no WS kline stream, so we pull OHLCV via
-        GeckoTerminal (through DEXManager) with a short local cache to
-        avoid hammering the API every evaluation tick.
-        """
         _, chain, address = symbol.split(":", 2)
         token = self.dex_tokens.get(f"{chain}:{address}")
         pair_address = token.pair_address if token else ""
@@ -277,12 +270,13 @@ class ForwardEngine:
 
     async def _orderbook_provider(self, exchange: str, symbol: str) -> dict:
         if symbol.startswith("DEX:"):
-            # DEX has no order-book depth in the CEX sense; skip that strategy.
             return {}
-        return await self.em.fetch_order_book(exchange, symbol, limit=int(self.s.strategies.get("orderbook_imbalance", {}).get("depth_levels", 20)))
+        return await self.em.fetch_order_book(
+            exchange, symbol,
+            limit=int(self.s.strategies.get("orderbook_imbalance", {}).get("depth_levels", 20))
+        )
 
     async def _ws_loop(self, ex_name: str, symbols: List[str], tf: str) -> None:
-        # Binance/Bybit handle their own reconnects inside ExchangeManager.
         async def on_candle(symbol: str, timeframe: str, candle: Candle) -> None:
             self.store.push(ex_name, symbol, timeframe, candle)
             await self.storage.add_tick(ex_name, symbol, candle.close, timeframe)
@@ -296,11 +290,9 @@ class ForwardEngine:
         if self.last_eval_ts.get(key) == candle.timestamp:
             return
         self.last_eval_ts[key] = candle.timestamp
-        # Cooldown: skip if this symbol had a signal recently
         now = time.time()
         if now - self._signal_cooldowns.get(symbol, 0) < self._signal_cooldown_seconds:
             return
-        # find SymbolInfo from universe
         info = None
         for i in (self.universes.get(exchange) or []):
             if i.symbol == symbol:
@@ -313,28 +305,23 @@ class ForwardEngine:
         except Exception as exc:  # noqa: BLE001
             logger.exception(f"evaluate error {exchange} {symbol}: {exc}")
             return
-        # Always update open positions on the new trigger close price.
         closed = self.risk.update_with_price(symbol, candle.close)
         for pos in closed:
             await self.storage.update_paper_close(pos)
-            # Signal status is auto-updated in storage.update_paper_close via signal_id
         if sig is None:
             return
         await self.storage.save_signal(sig)
-        self._signal_cooldowns[symbol] = time.time()  # register cooldown
+        self._signal_cooldowns[symbol] = time.time()
         logger.info(f"SIGNAL {sig.exchange} {sig.symbol} {sig.side.value} score={sig.score:.2f} -> {sig.rationale}")
-        # Try to open paper position.
         pos = self.risk.open_from_signal(sig)
         if pos is not None:
             await self.storage.open_paper(pos, signal_id=sig.id)
             self._emit_dashboard({"type": "signal_opened", "signal": sig.to_dict(), "position": pos.to_dict()})
-        # notify via Telegram
         if self.notify is not None:
             try:
                 await self.notify.send_signal(sig)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(f"telegram send failed: {exc}")
-        # Dashboard push handled via callbacks registered below.
         for cb in self._dashboard_callbacks:
             try:
                 await cb({"type": "signal", "data": sig.to_dict()})
@@ -348,8 +335,6 @@ class ForwardEngine:
             try:
                 await asyncio.sleep(wait)
                 await self._refresh_universes()
-                # Restart WS streams? Symbol set rarely changes daily; we skip
-                # re-subscribing for simplicity. New listings handled on next poll.
             except asyncio.CancelledError:
                 break
             except Exception as exc:  # noqa: BLE001
@@ -360,9 +345,7 @@ class ForwardEngine:
             async with self.universe_lock:
                 self.universes = await build_universes(self.em, self.s, futures_only=True)
                 self.last_universe_refresh = time.time()
-                # Also write to dashboard feed for "watchlist" view.
-                cbs = getattr(self, '_instance_universe_callbacks', ForwardEngine._universe_callbacks)
-                for cb in cbs:
+                for cb in self._universe_callbacks:
                     try:
                         await cb({ex: [
                             {"symbol": i.symbol, "base": i.base,
@@ -383,8 +366,6 @@ class ForwardEngine:
 
     # ---------------------------------------------------- DEX loops
     async def _dex_discovery_loop(self) -> None:
-        """Periodically discover fresh meme coins on Pump.fun/Raydium/
-        PancakeSwap/Uniswap and add them to the tracked-token watchlist."""
         interval = float(self.s.dex.get("discovery_interval_minutes", 5)) * 60
         max_tracked = int(self.s.dex.get("max_tracked_tokens", 200))
         while not self.stop_event.is_set():
@@ -396,8 +377,7 @@ class ForwardEngine:
                     self.dex_infos = {
                         key: dex_token_to_symbol_info(t) for key, t in fresh_map.items()
                     }
-                cbs = getattr(self, '_instance_universe_callbacks', ForwardEngine._universe_callbacks)
-                for cb in cbs:
+                for cb in self._universe_callbacks:
                     try:
                         await cb({"dex": [
                             {
@@ -423,8 +403,6 @@ class ForwardEngine:
                 break
 
     async def _dex_snipe_loop(self) -> None:
-        """Periodically refresh prices for tracked DEX tokens and run the
-        confluence engine on each — same evaluation path as CEX symbols."""
         interval = float(self.s.dex.get("price_poll_interval_seconds", 30))
         while not self.stop_event.is_set():
             try:
@@ -437,14 +415,12 @@ class ForwardEngine:
                             if key in self.dex_tokens:
                                 self.dex_tokens[key] = t
                     for key, t in updated.items():
-                        # Feed the latest price into the risk engine for SL/TP/trailing.
                         info = self.dex_infos.get(key)
                         if info is None:
                             continue
                         closed = self.risk.update_with_price(info.symbol, t.price_usd)
                         for pos in closed:
                             await self.storage.update_paper_close(pos)
-                            # Signal status auto-updated via signal_id
                         await self._dex_maybe_evaluate(t, info)
             except asyncio.CancelledError:
                 break
@@ -456,15 +432,13 @@ class ForwardEngine:
                 break
 
     async def _dex_maybe_evaluate(self, token, info: SymbolInfo) -> None:
-        # Cooldown: skip if this token had a signal recently
         now = time.time()
         token_key = f"{token.chain}:{token.address}"
         if now - self._signal_cooldowns.get(token_key, 0) < self._signal_cooldown_seconds:
             return
-        # Price change filter: only evaluate DEX tokens with recent movement
         price_change = getattr(token, 'price_change_5m_pct', 0) or 0
         if abs(price_change) < 1.0:
-            return  # skip completely flat tokens
+            return
         exchange = token.dex or "dex"
         try:
             sig = await self.confluence.evaluate_symbol(exchange, info)
@@ -474,7 +448,7 @@ class ForwardEngine:
         if sig is None:
             return
         await self.storage.save_signal(sig)
-        self._signal_cooldowns[token_key] = time.time()  # register cooldown
+        self._signal_cooldowns[token_key] = time.time()
         logger.info(
             f"DEX SIGNAL {sig.exchange} {token.symbol} ({token.chain}) {sig.side.value} "
             f"score={sig.score:.2f} -> {sig.rationale}"
@@ -499,14 +473,16 @@ class ForwardEngine:
         """Periodically run the 10-strategy meme hunter scan and push
         results to the dashboard."""
         interval = float(self.s.meme_hunter.get("scan_interval_seconds", 30))
+        # اولین push فوری پس از start — داشبرد خالی نماند
+        await asyncio.sleep(5)
         while not self.stop_event.is_set():
             try:
                 if self.dex_mgr is not None and self.meme_hunter is not None:
                     results = await self.meme_hunter.scan(self.dex_mgr)
                     self.meme_hunter_results = results
-                    # Push to dashboard
                     summary = self.meme_hunter.get_summary()
                     daily_picks = self.meme_hunter.get_daily_picks(limit=5)
+                    # push always — even if empty (so dashboard doesn't stay blank)
                     self._emit_dashboard({
                         "type": "meme_hunter",
                         "data": {
@@ -515,16 +491,40 @@ class ForwardEngine:
                             "daily_picks": daily_picks,
                         },
                     })
-                    if summary["total_unique"] > 0:
+                    if summary.get("total_unique", 0) > 0:
                         strat_counts = summary.get("by_strategy", {})
                         logger.info(
                             f"MemeHunter scan: {summary['total_unique']} opportunities "
                             f"({', '.join(f'{k}={v}' for k, v in strat_counts.items() if v)})"
                         )
+                    else:
+                        logger.debug("MemeHunter scan: 0 opportunities (DEX data may be loading)")
+                else:
+                    # پوش خالی تا داشبرد بدوند بداند scan آماده نیست
+                    self._emit_dashboard({
+                        "type": "meme_hunter",
+                        "data": {
+                            "summary": {"total_unique": 0, "by_strategy": {}},
+                            "hits": {},
+                            "daily_picks": [],
+                            "status": "initializing",
+                        },
+                    })
             except asyncio.CancelledError:
                 break
             except Exception as exc:  # noqa: BLE001
                 logger.exception(f"MemeHunter loop error: {exc}")
+                # push error state to dashboard
+                self._emit_dashboard({
+                    "type": "meme_hunter",
+                    "data": {
+                        "summary": {"total_unique": 0, "by_strategy": {}},
+                        "hits": {},
+                        "daily_picks": [],
+                        "status": "error",
+                        "error": str(exc),
+                    },
+                })
             try:
                 await asyncio.sleep(interval)
             except asyncio.CancelledError:
@@ -535,7 +535,6 @@ class ForwardEngine:
         while not self.stop_event.is_set():
             try:
                 open_pos = self.risk.open_positions_list()
-                # Fetch prices for all open position symbols
                 prices: Dict[str, float] = {}
                 for pos in open_pos:
                     if pos.symbol not in prices:
@@ -545,7 +544,6 @@ class ForwardEngine:
                                 prices[pos.symbol] = float(ticker["last"])
                         except Exception as exc:
                             logger.debug(f"fetch_ticker failed for {pos.exchange} {pos.symbol}: {exc}")
-                # Update positions with live prices + check SL/TP
                 for pos in open_pos:
                     price = prices.get(pos.symbol)
                     if price and price > 0:
@@ -557,12 +555,8 @@ class ForwardEngine:
                                 "signal": c.to_dict(),
                                 "position": c.to_dict(),
                             })
-                # Push live prices to dashboard (always, even if empty)
                 if prices:
-                    self._emit_dashboard({
-                        "type": "live_prices",
-                        "data": prices,
-                    })
+                    self._emit_dashboard({"type": "live_prices", "data": prices})
                     logger.debug(f"Live prices pushed: {prices}")
                 elif open_pos:
                     logger.warning(f"Live price loop: {len(open_pos)} open positions but 0 prices fetched")
@@ -576,9 +570,7 @@ class ForwardEngine:
                 break
 
     async def _price_checker_loop(self) -> None:
-        """Periodically check prices of previously detected tokens
-        to calculate success rate and win/loss stats."""
-        interval = 120  # check every 2 minutes
+        interval = 120
         while not self.stop_event.is_set():
             try:
                 if self.dex_mgr is not None:
@@ -595,35 +587,51 @@ class ForwardEngine:
 
     # ---------------------------------------------------- scalping loop
     async def _scalp_loop(self) -> None:
-        """Periodically evaluate top-volume coins for scalp signals."""
+        """Periodically evaluate top 200 coins for scalp signals (spot + futures)."""
         scalp_cfg = self.s.scalping
-        interval = float(scalp_cfg.get("evaluation_interval_seconds", 60))
-        top_n = int(scalp_cfg.get("top_volume_limit", 30))
-        cooldown = float(scalp_cfg.get("signal_cooldown_seconds", 300))
+        interval = float(scalp_cfg.get("evaluation_interval_seconds", 45))
+        top_n = int(scalp_cfg.get("top_volume_limit", 200))
+        cooldown = float(scalp_cfg.get("signal_cooldown_seconds", 180))
+        include_spot = bool(scalp_cfg.get("include_spot", True))
+        include_futures = bool(scalp_cfg.get("include_futures", True))
 
         while not self.stop_event.is_set():
             try:
-                # Get top-volume symbols from Binance
                 em = self.em
                 if not em.clients:
                     await asyncio.sleep(10)
                     continue
 
-                # Fetch top volume symbols from Binance
-                top_symbols = await self._get_top_volume_symbols("binance", top_n)
-                logger.info(f"Scalp loop: evaluating {len(top_symbols)} symbols")
+                # Collect both spot and futures top-volume symbols
+                all_symbols: List[SymbolInfo] = []
+                seen_syms: Set[str] = set()
+
+                if include_futures:
+                    fut_symbols = await self._get_top_volume_symbols("binance", top_n, futures=True)
+                    for s in fut_symbols:
+                        if s.symbol not in seen_syms:
+                            all_symbols.append(s)
+                            seen_syms.add(s.symbol)
+
+                if include_spot:
+                    spot_symbols = await self._get_top_volume_symbols("binance", top_n, futures=False)
+                    for s in spot_symbols:
+                        if s.symbol not in seen_syms:
+                            all_symbols.append(s)
+                            seen_syms.add(s.symbol)
+
+                logger.info(f"Scalp loop: evaluating {len(all_symbols)} symbols (spot+futures)")
 
                 scalp_evaluated = 0
                 scalp_signals = 0
-                for info in top_symbols:
+                for info in all_symbols:
                     now = time.time()
                     if now - self._scalp_cooldowns.get(info.symbol, 0) < cooldown:
                         continue
 
                     scalp_evaluated += 1
 
-                    # Feed recent candles into memory store for the scalp engine
-                    # Include scalp TFs + HTF trend filter TFs (4h, 1d)
+                    # Feed candles for trigger TF + HTF
                     scalp_tfs = set(self.scalp_engine.timeframes)
                     scalp_tfs.update(self.scalp_engine.htf_timeframes)
                     for tf in scalp_tfs:
@@ -643,7 +651,6 @@ class ForwardEngine:
                         continue
 
                     if sig is None:
-                        logger.debug(f"scalp {info.symbol}: no signal (score below threshold or filters)")
                         continue
 
                     await self.storage.save_signal(sig)
@@ -654,20 +661,17 @@ class ForwardEngine:
                         f"score={sig.score:.2f} -> {sig.rationale}"
                     )
 
-                    # Open paper position (respect scalp max_open_positions)
                     pos = self.risk.open_from_signal(sig)
                     if pos is not None:
                         await self.storage.open_paper(pos, signal_id=sig.id)
                         self._emit_dashboard({"type": "signal_opened", "signal": sig.to_dict(), "position": pos.to_dict()})
 
-                    # Notify
                     if self.notify is not None:
                         try:
                             await self.notify.send_signal(sig)
                         except Exception as exc:
                             logger.warning(f"telegram send failed: {exc}")
 
-                    # Dashboard push
                     for cb in self._dashboard_callbacks:
                         try:
                             await cb({"type": "scalp_signal", "data": sig.to_dict()})
@@ -685,68 +689,65 @@ class ForwardEngine:
             except asyncio.CancelledError:
                 break
 
-    async def _get_top_volume_symbols(self, exchange: str, limit: int = 30):
-        """Get top N USDT symbols by 24h volume from exchange, futures only."""
+    async def _get_top_volume_symbols(
+        self, exchange: str, limit: int = 200, futures: bool = True
+    ) -> List[SymbolInfo]:
+        """Get top N USDT symbols by 24h volume.
+        futures=True  → only symbols with perpetual futures (leverage)
+        futures=False → spot-only symbols (no futures required)
+        """
         from core.exchange import SymbolInfo
         try:
             if exchange not in self.em.clients:
                 return []
             client = self.em.clients[exchange]
-            # Get futures-enabled symbols set
             futures_set = self.em.get_futures_symbols(exchange)
             tickers = await client.fetch_tickers()
-            # Filter USDT pairs with futures and sort by quote volume
             usdt_pairs = []
             for sym, ticker in tickers.items():
                 if not sym.endswith("/USDT"):
                     continue
-                if sym not in futures_set:
-                    continue  # skip non-futures symbols
+                has_fut = sym in futures_set
+                if futures and not has_fut:
+                    continue
+                if not futures and has_fut:
+                    # spot-only: skip symbols already included via futures list
+                    continue
                 vol = ticker.get("quoteVolume", 0) or 0
                 if vol <= 0:
                     continue
-                usdt_pairs.append((sym, vol, ticker))
+                usdt_pairs.append((sym, vol))
             usdt_pairs.sort(key=lambda x: x[1], reverse=True)
             result = []
-            for sym, vol, ticker in usdt_pairs[:limit]:
+            for sym, vol in usdt_pairs[:limit]:
                 base = sym.split("/")[0]
                 result.append(SymbolInfo(
                     symbol=sym, base=base, quote="USDT",
-                    listed_at=None, has_futures=True,
+                    listed_at=None, has_futures=futures,
                 ))
             return result
         except Exception as exc:
-            logger.debug(f"top volume fetch error: {exc}")
+            logger.debug(f"top volume fetch error (futures={futures}): {exc}")
             return []
 
     # ---------------------------------------------------- dashboard plumbing
-    _dashboard_callbacks: List[Callable[[dict], Awaitable[None]]] = []
-    _universe_callbacks: List[Callable[[dict], Awaitable[None]]] = []
-
-    def __init_subclass__(cls, **kwargs):
-        super().__init_subclass__(**kwargs)
-        cls._dashboard_callbacks = []
-        cls._universe_callbacks = []
-
-    def register_dashboard(self, cb_signals: Callable[[dict], Awaitable[None]],
-                           cb_universe: Callable[[dict], Awaitable[None]]) -> None:
-        if not hasattr(self, '_instance_dashboard_callbacks'):
-            self._instance_dashboard_callbacks = list(ForwardEngine._dashboard_callbacks)
-            self._instance_universe_callbacks = list(ForwardEngine._universe_callbacks)
-        self._instance_dashboard_callbacks.append(cb_signals)
-        self._instance_universe_callbacks.append(cb_universe)
+    def register_dashboard(
+        self,
+        cb_signals: Callable[[dict], Awaitable[None]],
+        cb_universe: Callable[[dict], Awaitable[None]],
+    ) -> None:
+        self._dashboard_callbacks.append(cb_signals)
+        self._universe_callbacks.append(cb_universe)
 
     def _emit_dashboard(self, event: dict) -> None:
-        cbs = getattr(self, '_instance_dashboard_callbacks', ForwardEngine._dashboard_callbacks)
-        for cb in cbs:
+        for cb in self._dashboard_callbacks:
             asyncio.create_task(cb(event))
 
-    # ═════════════════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════════════════════
     # LIT Engine Loop — Liquidity Inducement Theorem
-    # ═════════════════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════════════════════
     async def _lit_loop(self) -> None:
         from strategies.lit_engine import LITSignal
-        import random as _rnd
 
         lit_cfg = self.s.raw.get("lit", {})
         cooldown_sec = int(lit_cfg.get("cooldown_seconds", 1800))
@@ -760,7 +761,6 @@ class ForwardEngine:
         await asyncio.sleep(wait_time)
         while not self.stop_event.is_set():
             try:
-                # Get LIT universe (top N crypto + special symbols)
                 all_symbols = list(self.universes.get("scalp", self.universes.get("default", [])))
                 special = lit_cfg.get("special_symbols", [])
                 for sym in special:
@@ -777,7 +777,6 @@ class ForwardEngine:
                     if (time.time() - last_time) < cooldown_sec:
                         continue
                     try:
-                        # Fetch candles via REST for trigger TF
                         trigger_tf = lit_tfs[0]
                         try:
                             fresh = await self.em.fetch_ohlcv("binance", sym, trigger_tf, limit=200)
@@ -788,9 +787,7 @@ class ForwardEngine:
                         cached = self.store.get("binance", sym, trigger_tf)
                         if not cached or len(cached) < 30:
                             continue
-                        # Convert to DataFrame
                         cand_df = pd.DataFrame([{"open": c.open, "high": c.high, "low": c.low, "close": c.close, "volume": c.volume, "timestamp": c.timestamp} for c in cached])
-                        # HTF bias
                         htf = "1h" if trigger_tf in ("1m", "5m", "15m") else "4h"
                         try:
                             fresh_htf = await self.em.fetch_ohlcv("binance", sym, htf, limit=100)
@@ -820,7 +817,7 @@ class ForwardEngine:
                 logger.error(f"LIT loop error: {e}")
             await asyncio.sleep(eval_interval)
 
-    async def _handle_lit_signal(self, signal: LITSignal) -> None:
+    async def _handle_lit_signal(self, signal) -> None:
         storage: Storage = self.storage
         risk: RiskEngine = self.risk
         from config.settings import get_settings
@@ -843,7 +840,6 @@ class ForwardEngine:
             if position_size <= 0:
                 return
 
-            # Record signal
             signal_record = Signal(
                 id=signal.id, symbol=signal.symbol, side=signal.side,
                 strategy=signal.strategy, entry=entry, stop_loss=sl,
@@ -855,12 +851,11 @@ class ForwardEngine:
                 position_size_usdt=balance * risk_pct / 100,
             )
             await storage.save_signal(signal_record)
-            await self._emit({"type": "signal", "signal": signal_record.to_dict()})
+            self._emit_dashboard({"type": "signal", "signal": signal_record.to_dict()})
 
-            # Paper position
             pos = risk.open_from_signal(signal_record)
             if pos:
-                await self._emit({"type": "open", "position": pos.to_dict()})
+                self._emit_dashboard({"type": "open", "position": pos.to_dict()})
 
             logger.info(
                 f"LIT {signal.side.upper()} {signal.symbol} @ {entry:.6g} "
