@@ -2074,7 +2074,7 @@ async function showLitSignalOnChart(signalId) {
     }
 
     litLiveChart = LightweightCharts.createChart(container, {
-      width: container.clientWidth, height: 350,
+      width: container.clientWidth, height: 520,
       layout: { background: { color: '#0d1117' }, textColor: '#c9d1d9' },
       grid: { vertLines: { color: 'rgba(48,54,61,0.5)' }, horzLines: { color: 'rgba(48,54,61,0.5)' } },
       crosshair: { mode: 0 }, timeScale: { timeVisible: true, secondsVisible: false },
@@ -2485,7 +2485,7 @@ function renderLitChart(data, tf) {
 
   const w = container.clientWidth || 600;
   litChart = LightweightCharts.createChart(container, {
-    width: w, height: 420,
+    width: w, height: 520,
     layout: { background: { color: '#0d1117' }, textColor: '#c9d1d9' },
     grid: { vertLines: { color: 'rgba(48,54,61,0.5)' }, horzLines: { color: 'rgba(48,54,61,0.5)' } },
     crosshair: { mode: 0 }, timeScale: { timeVisible: true, secondsVisible: false },
@@ -2517,7 +2517,7 @@ function renderLitChart(data, tf) {
   window._litCurrentTradeIdx = -1;
 }
 
-function litShowTradeOnChart(idx) {
+async function litShowTradeOnChart(idx) {
   const data = window._litBacktestData;
   const tf = window._litBacktestTF || '1h';
   const tr = data?.trades?.[idx];
@@ -2562,6 +2562,58 @@ function litShowTradeOnChart(idx) {
     _litPriceLines.push(litCandleSeries.createPriceLine({ price: tr.take_profit_2, color: '#a855f7', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'TP2' }));
     _litPriceLines.push(litCandleSeries.createPriceLine({ price: tr.stop_loss, color: '#ef4444', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'SL' }));
   } catch(e) { console.warn('createPriceLine error:', e); }
+
+  // ─── Draw LIT Annotations on Backtest Chart (FVG, OB, Liquidity) ───
+  try {
+    const symPath = (tr.symbol || data.symbol || '').replace('/', '-');
+    const annResp = await fetch(`/api/lit/analyze/${symPath}?timeframe=${tf}`);
+    const annData = await annResp.json();
+
+    // Draw FVG zones
+    const fvgZones = annData.fvg_zones || [];
+    fvgZones.forEach(fvg => {
+      if (fvg.top && fvg.bottom) {
+        const fvgColor = fvg.direction === 'bullish' ? '#8b5cf6' : '#ec4899';
+        _litPriceLines.push(litCandleSeries.createPriceLine({
+          price: fvg.top, color: fvgColor, lineWidth: 1, lineStyle: 2,
+          axisLabelVisible: false, title: `FVG ${fvg.direction === 'bullish' ? '↑' : '↓'}`,
+        }));
+        _litPriceLines.push(litCandleSeries.createPriceLine({
+          price: fvg.bottom, color: fvgColor, lineWidth: 1, lineStyle: 2,
+          axisLabelVisible: false, title: '',
+        }));
+      }
+    });
+
+    // Draw Order Blocks
+    const obZones = annData.order_blocks || [];
+    obZones.forEach(ob => {
+      if (ob.top && ob.bottom) {
+        const obColor = ob.direction === 'bullish' ? '#06b6d4' : '#f97316';
+        _litPriceLines.push(litCandleSeries.createPriceLine({
+          price: ob.top, color: obColor, lineWidth: 1, lineStyle: 1,
+          axisLabelVisible: false, title: `OB ${ob.direction === 'bullish' ? '↑' : '↓'}`,
+        }));
+        _litPriceLines.push(litCandleSeries.createPriceLine({
+          price: ob.bottom, color: obColor, lineWidth: 1, lineStyle: 1,
+          axisLabelVisible: false, title: '',
+        }));
+      }
+    });
+
+    // Draw Liquidity levels
+    const liqLevels = annData.liquidity_levels || [];
+    liqLevels.forEach(liq => {
+      if (liq.price > 0) {
+        const liqColor = liq.side === 'buy_side' ? '#ef444480' : '#22c55e80';
+        _litPriceLines.push(litCandleSeries.createPriceLine({
+          price: liq.price, color: liqColor, lineWidth: 1, lineStyle: 3,
+          axisLabelVisible: false,
+          title: `${liq.side === 'buy_side' ? 'BSL' : 'SSL'} ${liq.kind || ''}`,
+        }));
+      }
+    });
+  } catch(annErr) { console.debug('BT annotations:', annErr); }
 
   // Zoom to trade range — use actual timeframe
   const tfSeconds = { '1m':60, '5m':300, '15m':900, '1h':3600, '4h':14400, '1d':86400 };
