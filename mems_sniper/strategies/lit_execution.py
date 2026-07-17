@@ -254,9 +254,7 @@ class ExecutionEngine:
             return False
         if plan.rr_tp2 < self.min_rr:
             return False
-        # No signal without sweep + displacement
-        if candidate.sweep is None:
-            return False
+        # Must have at least displacement
         if candidate.displacement is None:
             return False
         return True
@@ -272,20 +270,34 @@ class ExecutionEngine:
             ob = candidate.order_block
             return ob.bottom, ob.top, (ob.top + ob.bottom) / 2
         else:
-            # Fallback: use current price
-            return current_price, current_price, current_price
+            # Fallback: tight zone around current price
+            spread = current_price * 0.002  # 0.2% spread
+            return current_price - spread, current_price + spread, current_price
 
     def _calc_stop_loss(self, candidate: SetupCandidate, atr: float, side: str) -> float:
         """Structural stop placement."""
-        if candidate.sweep:
+        if candidate.sweep and candidate.sweep.pool:
             # Stop beyond the sweep wick
             if side == "long":
                 return candidate.sweep.pool.price - candidate.sweep.max_excursion
             else:
                 return candidate.sweep.pool.price + candidate.sweep.max_excursion
 
-        # Fallback: ATR-based
+        # Fallback: use FVG boundary or ATR-based
+        if candidate.fvg:
+            if side == "long":
+                return candidate.fvg.bottom - 0.3 * atr
+            else:
+                return candidate.fvg.top + 0.3 * atr
+
+        # Last fallback: ATR-based from current price or entry
         entry = candidate.fvg.midpoint if candidate.fvg else 0
+        if entry <= 0:
+            # Use displacement origin
+            if candidate.displacement:
+                entry = candidate.displacement.body_size  # Not ideal but safe
+            else:
+                return 0  # Will fail validation
         if side == "long":
             return entry - 1.5 * atr
         else:

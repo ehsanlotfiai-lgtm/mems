@@ -189,6 +189,12 @@ class LITEngine:
             htf_bias, entry_structure, liq_map, atr, current_price, timestamps,
         )
 
+        # Fallback: if no strict setup found, try simpler displacement+FVG setup
+        if candidate is None:
+            candidate = self._fallback_displacement_setup(
+                opens, highs, lows, closes, htf_bias, entry_structure, liq_map, atr, current_price, timestamps
+            )
+
         if candidate is None:
             return None
 
@@ -311,6 +317,97 @@ class LITEngine:
             f"SL={plan.stop_loss_buffered:.6g} | TP2={plan.take_profit_2:.6g}"
         )
         return signal
+
+    def _fallback_displacement_setup(
+        self,
+        opens: np.ndarray, highs: np.ndarray, lows: np.ndarray, closes: np.ndarray,
+        htf_bias: TrendState, structure: StructureState, liq_map: LiquidityMap,
+        atr: float, current_price: float, timestamps,
+    ) -> Optional[SetupCandidate]:
+        """Fallback: simpler setup using displacement + structure break only.
+        
+        This fires more often than the strict sweep-based setups.
+        Requirements:
+        1. HTF bias exists (bullish or bearish)
+        2. Recent displacement candle in bias direction
+        3. Recent BOS or CHoCH confirming direction
+        4. FVG exists (optional but boosts score)
+        """
+        from strategies.lit_structure import get_recent_displacement, get_recent_bos, get_recent_choch
+        from strategies.lit_patterns import SetupCandidate, SetupType, EntryMode, SignalStatus, FVG
+
+        n = len(closes)
+
+        # Must have HTF direction
+        if htf_bias == TrendState.RANGING:
+            # Use LTF structure as fallback
+            if structure.trend == TrendState.RANGING:
+                return None
+            htf_bias = structure.trend
+
+        # Determine side from bias
+        if htf_bias == TrendState.BULLISH:
+            side = "long"
+            disp_dir = "bullish"
+        else:
+            side = "short"
+            disp_dir = "bearish"
+
+        # Need recent displacement
+        disp = get_recent_displacement(structure, disp_dir, max_bars_ago=15, current_idx=n-1)
+        if disp is None:
+            return None
+
+        # Need structure confirmation (BOS or CHoCH)
+        struct_event = get_recent_bos(structure, max_bars_ago=20, current_idx=n-1)
+        if struct_event is None:
+            struct_event = get_recent_choch(structure, max_bars_ago=20, current_idx=n-1)
+        if struct_event is None:
+            return None
+
+        # Verify alignment
+        if side == "long" and struct_event.kind.value not in ("bullish_bos", "bullish_choch"):
+            return None
+        if side == "short" and struct_event.kind.value not in ("bearish_bos", "bearish_choch"):
+            return None
+
+        # Find FVG for entry (optional)
+        fvg_detector = self.setup_detector.fvg_detector
+        fvgs = fvg_detector.find_fvgs(opens, highs, lows, closes, timestamps)
+        fvg = fvg_detector.get_unmitigated_fvg(fvgs, disp_dir, current_price)
+
+        # Build reasons
+        reasons = []
+        bias_fa = "صعودی" if side == "long" else "نزولی"
+        reasons.append(f"HTF bias: {bias_fa}")
+        reasons.append(f"Displacement {disp.body_atr_ratio:.1f}x ATR — حرکت قوی")
+        reasons.append(f"Structure: {struct_event.kind.value}")
+        if fvg:
+            reasons.append(f"FVG entry zone: {fvg.bottom:.6g} — {fvg.top:.6g}")
+
+        # Target: nearest opposing liquidity
+        target = None
+        if side == "long" and liq_map.buy_side_pools:
+            target = liq_map.buy_side_pools[0]
+            reasons.append(f"Target: buy-side liquidity at {target.price:.6g}")
+        elif side == "short" and liq_map.sell_side_pools:
+            target = liq_map.sell_side_pools[0]
+            reasons.append(f"Target: sell-side liquidity at {target.price:.6g}")
+
+        return SetupCandidate(
+            setup_type=SetupType.SWEEP_REVERSAL,  # Use sweep_reversal type (closest match)
+            side=side,
+            entry_mode=EntryMode.AGGRESSIVE,
+            status=SignalStatus.READY,
+            sweep=liq_map.sweeps[-1] if liq_map.sweeps else None,
+            structure_break=struct_event,
+            displacement=disp,
+            fvg=fvg,
+            htf_bias=htf_bias,
+            entry_tf_structure=structure.trend,
+            reasons=reasons,
+            target_pool=target,
+        )
 
     def _build_reasoning(
         self, candidate: SetupCandidate, plan: ExecutionPlan,
