@@ -103,6 +103,24 @@ class ExecutionEngine:
         else:
             stop_buffered = raw_stop + buffer
 
+        # ── CRITICAL: Force SL on correct side of ideal_entry ──
+        min_sl_pct = 0.005  # Minimum 0.5% distance
+        min_sl_distance = ideal_entry * min_sl_pct
+        if side == "long":
+            # SL MUST be BELOW entry for long
+            if stop_buffered >= ideal_entry:
+                stop_buffered = ideal_entry - max(1.5 * atr, min_sl_distance)
+            # Enforce minimum distance
+            if (ideal_entry - stop_buffered) < min_sl_distance:
+                stop_buffered = ideal_entry - min_sl_distance
+        else:
+            # SL MUST be ABOVE entry for short
+            if stop_buffered <= ideal_entry:
+                stop_buffered = ideal_entry + max(1.5 * atr, min_sl_distance)
+            # Enforce minimum distance
+            if (stop_buffered - ideal_entry) < min_sl_distance:
+                stop_buffered = ideal_entry + min_sl_distance
+
         # ── Risk Distance ──
         risk_distance = abs(ideal_entry - stop_buffered)
         if risk_distance <= 0:
