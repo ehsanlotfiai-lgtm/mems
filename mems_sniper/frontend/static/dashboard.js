@@ -279,7 +279,32 @@ async function loadSignals() {
     }).join('');
     // Load signal win rates
     loadSignalWinRates();
+    // Fetch live prices for displayed signals
+    fetchPricesForSignals(signals);
   } catch (e) { console.error(e); }
+}
+
+/* Fetch live prices for signal symbols */
+async function fetchPricesForSignals(signals) {
+  const symbols = [...new Set(signals.map(s => s.symbol).filter(s => s && !s.startsWith('DEX:')))].slice(0, 20);
+  for (const sym of symbols) {
+    if (livePrices[sym]) continue; // Already have it
+    try {
+      const resp = await fetch(`/api/chart/binance/${sym.replace('/', '_')}/1m?limit=1`);
+      const data = await resp.json();
+      if (data.candles && data.candles.length > 0) {
+        livePrices[sym] = data.candles[data.candles.length - 1].close;
+      }
+    } catch(e) {}
+  }
+  // Re-render after prices loaded
+  if (symbols.length > 0) {
+    const liveBox = $('#signals_live');
+    if (liveBox && stateCache.signals.length > 0) {
+      const filtered = signalFilter === 'all' ? stateCache.signals : stateCache.signals.filter(s => (s.status || 'open') === signalFilter);
+      liveBox.innerHTML = filtered.map(renderSignalCard).join('') || '';
+    }
+  }
 }
 
 /* Signal Win Rates */
@@ -1586,6 +1611,8 @@ async function loadScalping() {
     scalpCache = signals.slice(0, 30);
     renderScalpSignals();
     renderScalpHistory(signals);
+    // Fetch live prices for scalp symbols
+    fetchPricesForSignals(signals);
   } catch (e) { console.error('loadScalping:', e); }
   try {
     const { win_rates } = await json('/api/scalping/win-rates');
