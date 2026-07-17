@@ -228,6 +228,7 @@ function renderSignalCard(s) {
         <div class="level" style="color:#a855f7">TP2<b>${s.tp2 ? fmtPrice(s.tp2) : '—'}</b></div>
         <div class="level" style="color:#f97316">TP3<b>${s.tp3 ? fmtPrice(s.tp3) : '—'}</b></div>
         <div class="level" style="color:#ef4444">SL<b>${fmtPrice(s.stop_loss)}</b></div>
+        <div class="level" style="color:#38bdf8;background:rgba(56,189,248,0.1)">💲 فعلی<b>${livePrices[s.symbol] ? fmtPrice(livePrices[s.symbol]) : '...'}</b></div>
       </div>
       <div class="rationale">${s.rationale || ''}</div>
       <div style="margin-top:6px;font-size:11px;color:#38bdf8">📊 کلیک کنید → نمایش روی نمودار</div>
@@ -261,16 +262,21 @@ async function loadSignals() {
     // history table with status column
     const statusFa = { open: '🟢 فعال', tp: '✅ سود', sl: '❌ ضرر', trailing: '🔄 تریلینگ', closed: '⏰ بسته' };
     const tb = $('#signals_history');
-    tb.innerHTML = signals.slice(0, 50).map(s => `
+    tb.innerHTML = signals.slice(0, 50).map(s => {
+      const curPrice = livePrices[s.symbol] ? fmtPrice(livePrices[s.symbol]) : '...';
+      const curColor = livePrices[s.symbol] ? (livePrices[s.symbol] > s.entry ? (s.side === 'long' ? 'var(--success)' : 'var(--danger)') : (s.side === 'long' ? 'var(--danger)' : 'var(--success)')) : '';
+      return `
       <tr>
         <td>${fmtTime(s.created_at)}</td><td>${s.exchange}</td>
         <td>${s.base || s.symbol}${s.symbol.startsWith('DEX:') ? ' <small style="color:#f97316">DEX</small>' : ''}</td>
         <td class="${s.side}">${s.side.toUpperCase()}</td>
         <td>${s.score.toFixed(2)}</td>
         <td>${fmtPrice(s.entry)}</td><td>${fmtPrice(s.take_profit)}</td><td>${fmtPrice(s.stop_loss)}</td>
+        <td style="color:${curColor};font-weight:bold">${curPrice}</td>
         <td><span class="sig-badge-inline status-${s.status || 'open'}">${statusFa[s.status || 'open'] || s.status}</span></td>
         <td>${[...new Set(s.hits.map(h => h.name))].join(', ')}</td>
-      </tr>`).join('');
+      </tr>`;
+    }).join('');
     // Load signal win rates
     loadSignalWinRates();
   } catch (e) { console.error(e); }
@@ -1467,6 +1473,7 @@ function renderScalpSignalCard(s) {
         <div class="level">ورود<b>${fmtPrice(s.entry)}</b></div>
         <div class="level">TP<b>${fmtPrice(s.take_profit)}</b></div>
         <div class="level">SL<b>${fmtPrice(s.stop_loss)}</b></div>
+        <div class="level" style="color:#38bdf8;background:rgba(56,189,248,0.1)">💲 فعلی<b>${livePrices[s.symbol] ? fmtPrice(livePrices[s.symbol]) : '...'}</b></div>
       </div>
       <div class="rationale">${s.rationale || ''}</div>
     </div>
@@ -1497,16 +1504,21 @@ function renderScalpHistory(signals) {
   const tb = $('#scalp_history');
   if (!tb) return;
   const statusFa = { open: '🟢 فعال', tp: '✅ سود', sl: '❌ ضرر', trailing: '🔄 تریلینگ', closed: '⏰ بسته' };
-  tb.innerHTML = signals.slice(0, 50).map(s => `
+  tb.innerHTML = signals.slice(0, 50).map(s => {
+    const curPrice = livePrices[s.symbol] ? fmtPrice(livePrices[s.symbol]) : '...';
+    const curColor = livePrices[s.symbol] ? (livePrices[s.symbol] > s.entry ? (s.side === 'long' ? 'var(--success)' : 'var(--danger)') : (s.side === 'long' ? 'var(--danger)' : 'var(--success)')) : '';
+    return `
     <tr>
       <td>${fmtTime(s.created_at)}</td><td>${s.exchange}</td>
       <td>${s.base || s.symbol}</td>
       <td class="${s.side}">${s.side.toUpperCase()}</td>
       <td>${s.score.toFixed(2)}</td>
       <td>${fmtPrice(s.entry)}</td><td>${fmtPrice(s.take_profit)}</td><td>${fmtPrice(s.stop_loss)}</td>
+      <td style="color:${curColor};font-weight:bold">${curPrice}</td>
       <td><span class="sig-badge-inline status-${s.status || 'open'}">${statusFa[s.status || 'open'] || s.status}</span></td>
       <td>${[...new Set(s.hits.map(h => h.name))].join(', ')}</td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 }
 
 function renderScalpWinRates(wr) {
