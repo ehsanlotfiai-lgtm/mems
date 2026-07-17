@@ -56,8 +56,8 @@ STRATEGY_FA = {
     "bb_breakout": {"name": "🎯 شکست بولینگر", "desc": "قیمت از باندهای بولینگر خارج شده. نشانه‌ای از افزایش نوسان و شروع روند."},
     "funding_oi_spike": {"name": "💸 اسپایک funding/OI", "desc": "افزایش ناگهانی open interest + تغییر funding rate. نشانه از فیوچرز."},
     "social_momentum": {"name": "📱 مومنتوم سوشال", "desc": "افزایش ذکرها در شبکه‌های اجتماعی + مومنتوم قیمتی."},
-    "ema_cross": {"name": "📈 تقاطع EMA", "desc": "EMA سریع از EMA کند عبور کرده. سیگنالollowing روند."},
-    "adx_trend": {"name": "📊 روند ADX", "desc": " absorbs روند قوی تشخیص داده شده. ADX بالاتر از ۲۵ نشان‌دهنده روند قوی است."},
+    "ema_cross": {"name": "📈 تقاطع EMA", "desc": "EMA سریع از EMA کند عبور کرده. سیگنال following روند."},
+    "adx_trend": {"name": "📊 روند ADX", "desc": "روند قوی تشخیص داده شده. ADX بالاتر از ۲۵ نشان‌دهنده روند قوی است."},
     "squeeze_momentum": {"name": "💎 Squeeze", "desc": "فشرده‌سازی بولینگر داخل کتلر و سپس آزادسازی. نشانه انفجار قیمتی."},
     "vwap": {"name": "📐 VWAP", "desc": "قیمت از VWAP فاصله گرفته. برگشت به میانگین احتمال دارد."},
     "macd_crossover": {"name": "📊 MACD", "desc": "تقاطع هیستوگرام MACD از صفر. نشان‌دهنده تغییر مومنتوم."},
@@ -81,7 +81,6 @@ def _build_strategy_explanations(sig: dict) -> list:
         info = STRATEGY_FA.get(name, {"name": name, "desc": ""})
         side_fa = "🟢 خرید (LONG)" if side in ("long", None) else "🔴 فروش (SHORT)"
 
-        # Build detail summary
         detail_parts = []
         for k, v in detail.items():
             if k in ("side", "type"):
@@ -104,6 +103,12 @@ def _build_strategy_explanations(sig: dict) -> list:
             "detail": detail_str,
         })
     return explanations
+
+
+async def _ensure_storage(s: Storage) -> None:
+    """FIX: centralised helper — avoids repeating `if s._db is None` everywhere."""
+    if not s.is_connected:
+        await s.connect()
 
 
 def create_app(
@@ -159,28 +164,23 @@ def create_app(
     @app.get("/api/signals")
     async def api_signals(limit: int = Query(100, ge=1, le=500)) -> dict:
         s: Storage = _app_state["storage"]
-        if s._db is None:
-            await s.connect()
+        await _ensure_storage(s)
         return {"signals": await s.recent_signals(limit)}
 
     @app.get("/api/trades")
     async def api_trades(limit: int = Query(100, ge=1, le=500)) -> dict:
         s: Storage = _app_state["storage"]
-        if s._db is None:
-            await s.connect()
+        await _ensure_storage(s)
         return {"trades": await s.recent_trades(limit)}
 
     @app.get("/api/trades/win-rates")
     async def api_trades_win_rates() -> dict:
-        """Get time-based win rates (daily, hourly, 4-hour, all)."""
         s: Storage = _app_state["storage"]
-        if s._db is None:
-            await s.connect()
+        await _ensure_storage(s)
         return {"win_rates": await s.get_time_win_rates()}
 
     @app.get("/api/market/sentiment")
     async def api_market_sentiment() -> dict:
-        """Get market sentiment data (Fear & Greed, trending coins)."""
         try:
             from core.news import get_news_tracker
             tracker = get_news_tracker(_app_state["settings"].fundamentals)
@@ -195,8 +195,7 @@ def create_app(
         state = _app_state["risk"].snapshot()
         reply = _app_state["assistant"].respond(text, risk_state=state)
         s: Storage = _app_state["storage"]
-        if s._db is None:
-            await s.connect()
+        await _ensure_storage(s)
         if text.strip():
             await s.assistant_log("user", text)
         await s.assistant_log("assistant", reply.text)
@@ -205,18 +204,15 @@ def create_app(
     @app.get("/api/assistant/log")
     async def api_assistant_log(limit: int = 50) -> dict:
         s: Storage = _app_state["storage"]
-        if s._db is None:
-            await s.connect()
+        await _ensure_storage(s)
         return {"log": await s.recent_assistant_log(limit)}
 
     @app.get("/api/chart/{exchange}/{symbol}/{tf}")
     async def api_chart(exchange: str, symbol: str, tf: str, limit: int = 300) -> dict:
         em: ExchangeManager = _app_state["em"]
         sym = symbol.replace("_", "/")
-        # Handle DEX tokens — no REST candle data available
         if exchange == "dex" or sym.startswith("DEX:"):
             return {"symbol": sym, "exchange": exchange, "timeframe": tf, "candles": []}
-        # Ensure exchange client is available
         if exchange not in em.clients:
             try:
                 await em.start()
@@ -237,15 +233,8 @@ def create_app(
 
     @app.get("/api/signal/{signal_id}/chart")
     async def api_signal_chart(signal_id: str) -> dict:
-        """Load chart data + full signal analysis for a specific signal.
-
-        Returns candle data across all timeframes + markers (entry/SL/TP)
-        + per-strategy breakdown for the signal explanation panel.
-        """
         s: Storage = _app_state["storage"]
-        if s._db is None:
-            await s.connect()
-        # Find the signal by ID
+        await _ensure_storage(s)
         cur = await s.db.execute(
             "SELECT * FROM signals WHERE id = ?", (signal_id,)
         )
@@ -263,7 +252,6 @@ def create_app(
         symbol = sig["symbol"]
         is_dex = symbol.startswith("DEX:")
 
-        # Fetch candles for all timeframes
         candles_by_tf = {}
         if not is_dex:
             sym = symbol.replace("_", "/")
@@ -276,10 +264,7 @@ def create_app(
                 except Exception:  # noqa: BLE001
                     candles_by_tf[tf] = []
 
-        # Build strategy explanation in Persian
         strategy_explanations = _build_strategy_explanations(sig)
-
-        # Determine signal direction side
         side = sig["side"]
         entry = sig["entry"]
         stop_loss = sig["stop_loss"]
@@ -341,16 +326,13 @@ def create_app(
         risk = s.risk
         strats = s.strategies
         return {
-            # API Keys (masked)
             "binance_key": "***" if s.env.get("BINANCE_API_KEY") else "",
             "binance_secret": "***" if s.env.get("BINANCE_API_SECRET") else "",
             "bybit_key": "***" if s.env.get("BYBIT_API_KEY") else "",
             "bybit_secret": "***" if s.env.get("BYBIT_API_SECRET") else "",
-            # Telegram
             "telegram_enabled": s.telegram.get("enabled", False),
             "tg_token": "***" if s.telegram_token else "",
             "tg_chat": s.telegram_chat_id or "",
-            # Risk
             "risk_per_trade_pct": risk.get("risk_per_trade_pct", 1.0),
             "initial_balance": risk.get("initial_paper_balance", 10000),
             "max_positions": risk.get("max_open_positions", 8),
@@ -358,7 +340,6 @@ def create_app(
             "sl_mult": risk.get("stop_loss_atr_mult", 1.5),
             "tp_mult": risk.get("take_profit_atr_mult", 3.0),
             "trail_mult": risk.get("trailing_activate_atr_mult", 2.0),
-            # Strategies
             "min_signal_score": s.min_signal_score,
             "st_new_listing": strats.get("new_listing_sniper", {}).get("enabled", True),
             "st_volume": strats.get("volume_spike", {}).get("enabled", True),
@@ -378,11 +359,9 @@ def create_app(
             "st_obv": strats.get("obv_divergence", {}).get("enabled", True),
             "st_sr": strats.get("sr_bounce", {}).get("enabled", True),
             "st_vol_trend": strats.get("volume_trend", {}).get("enabled", True),
-            # DEX
             "dex_enabled": s.dex.get("enabled", True),
             "dex_min_liquidity": s.dex.get("min_liquidity_usd", 10000),
             "dex_max_age": s.dex.get("max_age_hours", 24),
-            # LLM
             "llm_enabled": s.assistant.get("use_llm", False),
             "llm_model": s.assistant.get("llm_model", "gpt-4o-mini"),
             "llm_key": "***" if s.llm_api_key else "",
@@ -396,7 +375,6 @@ def create_app(
             settings_path = PROJECT_ROOT / "config" / "config.yaml"
             env_path = PROJECT_ROOT / ".env"
 
-            # Update .env with secrets
             env_lines = []
             if env_path.exists():
                 env_lines = env_path.read_text(encoding="utf-8").splitlines()
@@ -431,15 +409,12 @@ def create_app(
 
             env_path.write_text("\n".join(env_lines) + "\n", encoding="utf-8")
 
-            # Update config.yaml
             with settings_path.open("r", encoding="utf-8") as f:
                 cfg = yaml.safe_load(f) or {}
 
-            # Telegram
             cfg.setdefault("telegram", {})
             cfg["telegram"]["enabled"] = payload.get("telegram_enabled", False)
 
-            # Risk
             cfg.setdefault("risk", {})
             cfg["risk"]["risk_per_trade_pct"] = payload.get("risk_per_trade_pct", 1.0)
             cfg["risk"]["initial_paper_balance"] = payload.get("initial_balance", 10000)
@@ -449,7 +424,6 @@ def create_app(
             cfg["risk"]["take_profit_atr_mult"] = payload.get("tp_mult", 3.0)
             cfg["risk"]["trailing_activate_atr_mult"] = payload.get("trail_mult", 2.0)
 
-            # Strategies
             cfg["min_signal_score"] = payload.get("min_signal_score", 0.55)
             cfg.setdefault("strategies", {})
             for key, field in [
@@ -467,13 +441,11 @@ def create_app(
                 cfg["strategies"].setdefault(key, {})
                 cfg["strategies"][key]["enabled"] = payload.get(field, True)
 
-            # DEX
             cfg.setdefault("dex", {})
             cfg["dex"]["enabled"] = payload.get("dex_enabled", True)
             cfg["dex"]["min_liquidity_usd"] = payload.get("dex_min_liquidity", 10000)
             cfg["dex"]["max_age_hours"] = payload.get("dex_max_age", 24)
 
-            # LLM
             cfg.setdefault("assistant", {})
             cfg["assistant"]["use_llm"] = payload.get("llm_enabled", False)
             cfg["assistant"]["llm_model"] = payload.get("llm_model", "gpt-4o-mini")
@@ -481,7 +453,6 @@ def create_app(
             with settings_path.open("w", encoding="utf-8") as f:
                 yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False)
 
-            # Reload settings
             from config.settings import reload_settings
             reload_settings()
 
@@ -492,7 +463,6 @@ def create_app(
     # ---------------------------------------------------- Meme Hunter API
     @app.get("/api/hunter/results")
     async def api_hunter_results() -> dict:
-        """Get latest meme hunter scan results."""
         eng = _app_state.get("forward")
         if eng is None or not hasattr(eng, 'meme_hunter') or eng.meme_hunter is None:
             return {"summary": {}, "hits": {}}
@@ -503,7 +473,6 @@ def create_app(
 
     @app.get("/api/hunter/summary")
     async def api_hunter_summary() -> dict:
-        """Get meme hunter summary stats + daily picks."""
         eng = _app_state.get("forward")
         if eng is None or not hasattr(eng, 'meme_hunter') or eng.meme_hunter is None:
             return {"total_unique": 0, "by_strategy": {}, "last_scan": 0, "daily_picks": []}
@@ -514,7 +483,6 @@ def create_app(
 
     @app.get("/api/hunter/strategy/{strategy}")
     async def api_hunter_strategy(strategy: str) -> dict:
-        """Get hits for a specific hunter strategy."""
         eng = _app_state.get("forward")
         if eng is None or not hasattr(eng, 'meme_hunter') or eng.meme_hunter is None:
             return {"strategy": strategy, "hits": []}
@@ -525,7 +493,6 @@ def create_app(
 
     @app.get("/api/hunter/success")
     async def api_hunter_success(min_score: float = 0.0, max_score: float = 1.0) -> dict:
-        """Get success rate stats for all strategies, with optional score filtering."""
         try:
             from core.hunter_tracker import get_hunter_tracker
             tracker = get_hunter_tracker()
@@ -541,7 +508,6 @@ def create_app(
 
     @app.get("/api/hunter/recent")
     async def api_hunter_recent(limit: int = 50) -> dict:
-        """Get recent detections with their results."""
         try:
             from core.hunter_tracker import get_hunter_tracker
             tracker = get_hunter_tracker()
@@ -552,10 +518,8 @@ def create_app(
 
     @app.post("/api/hunter/test")
     async def api_hunter_test() -> dict:
-        """Debug: test all API connections and show what's happening."""
         results = {"tests": []}
 
-        # Test 1: DexScreener trending
         try:
             from core.dex import DexScreenerClient
             ds = DexScreenerClient(timeout=10)
@@ -570,7 +534,6 @@ def create_app(
         except Exception as e:
             results["tests"].append({"name": "DexScreener trending", "status": "error", "error": str(e)})
 
-        # Test 2: DexScreener search for pump tokens
         try:
             from core.dex import DexScreenerClient
             ds = DexScreenerClient(timeout=10)
@@ -585,7 +548,6 @@ def create_app(
         except Exception as e:
             results["tests"].append({"name": "DexScreener search", "status": "error", "error": str(e)})
 
-        # Test 3: Pump.fun API
         try:
             from core.dex import PumpFunClient
             pf = PumpFunClient(timeout=10)
@@ -600,7 +562,6 @@ def create_app(
         except Exception as e:
             results["tests"].append({"name": "Pump.fun", "status": "error", "error": str(e)})
 
-        # Test 4: DexScreener latest pairs (replaces GMGN which is unreachable)
         try:
             from core.dex import DexScreenerClient
             ds = DexScreenerClient(timeout=10)
@@ -615,7 +576,6 @@ def create_app(
         except Exception as e:
             results["tests"].append({"name": "DexScreener latest pairs", "status": "error", "error": str(e)})
 
-        # Test 5: Full discovery via DEXManager
         try:
             from core.dex import get_dex_manager
             from config.settings import get_settings
@@ -632,7 +592,6 @@ def create_app(
         except Exception as e:
             results["tests"].append({"name": "Full discovery", "status": "error", "error": str(e)})
 
-        # Test 6: Tracker DB
         try:
             from core.hunter_tracker import get_hunter_tracker
             tracker = get_hunter_tracker()
@@ -668,7 +627,6 @@ def create_app(
             em: ExchangeManager = _app_state["em"]
             if not em.clients:
                 await em.start()
-            # Test by fetching a simple ticker
             ticker = await em.fetch_ticker("binance", "BTC/USDT")
             return {"ok": True, "price": ticker.get("last", 0)}
         except Exception as exc:
@@ -678,23 +636,19 @@ def create_app(
     @app.get("/api/scalping/signals")
     async def api_scalp_signals(limit: int = Query(100, ge=1, le=500)) -> dict:
         s: Storage = _app_state["storage"]
-        if s._db is None:
-            await s.connect()
+        await _ensure_storage(s)
         return {"signals": await s.recent_scalp_signals(limit)}
 
     @app.get("/api/scalping/win-rates")
     async def api_scalp_win_rates() -> dict:
         s: Storage = _app_state["storage"]
-        if s._db is None:
-            await s.connect()
+        await _ensure_storage(s)
         return {"win_rates": await s.get_scalp_win_rates()}
 
     @app.get("/api/scalping/stats")
     async def api_scalp_stats() -> dict:
-        """Scalping summary: total signals, active, win rate."""
         s: Storage = _app_state["storage"]
-        if s._db is None:
-            await s.connect()
+        await _ensure_storage(s)
         win_rates = await s.get_scalp_win_rates()
         signals = await s.recent_scalp_signals(200)
         total = len(signals)
@@ -711,7 +665,6 @@ def create_app(
 
     @app.post("/api/scalping/test")
     async def api_scalp_test() -> dict:
-        """Test scalping engine on a symbol."""
         try:
             from strategies.scalping_engine import ScalpingEngine
             from core.exchange import SymbolInfo
@@ -742,11 +695,9 @@ def create_app(
 
     @app.post("/api/reset/scalping")
     async def api_reset_scalping() -> dict:
-        """Reset scalping signals and trades."""
         try:
             s: Storage = _app_state["storage"]
-            if s._db is None:
-                await s.connect()
+            await _ensure_storage(s)
             await s.db.execute("DELETE FROM signals WHERE id LIKE 'SCP_%'")
             await s.db.execute("DELETE FROM paper_trades WHERE signal_id LIKE 'SCP_%'")
             await s.db.commit()
@@ -757,24 +708,21 @@ def create_app(
     # ---------------------------------------------------- Reset APIs
     @app.post("/api/reset/hunter")
     async def api_reset_hunter() -> dict:
-        """Reset meme hunter — clear cached results and force rescan."""
         try:
             eng = _app_state.get("forward")
             if eng and hasattr(eng, 'meme_hunter') and eng.meme_hunter:
                 eng.meme_hunter._all_hits = []
                 eng.meme_hunter._by_strategy = {}
-                eng.meme_hunter._last_scan = 0  # force rescan on next tick
+                eng.meme_hunter._last_scan = 0
             return {"ok": True, "msg": "شکارچی ریست شد — اسکن مجدد در اسکن بعدی"}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
     @app.post("/api/reset/signals")
     async def api_reset_signals() -> dict:
-        """Reset signals — clear signal history from DB."""
         try:
             s: Storage = _app_state["storage"]
-            if s._db is None:
-                await s.connect()
+            await _ensure_storage(s)
             await s.db.execute("DELETE FROM signals")
             await s.db.commit()
             return {"ok": True, "msg": "تاریخچه سیگنال‌ها پاک شد"}
@@ -783,21 +731,17 @@ def create_app(
 
     @app.post("/api/reset/positions")
     async def api_reset_positions() -> dict:
-        """Reset positions — close all open positions at current price and reset equity."""
         try:
             risk: RiskEngine = _app_state["risk"]
             closed_count = 0
             for pos in list(risk.open_positions.values()):
                 risk._close(pos, pos.entry, "manual_reset")
                 closed_count += 1
-            # Reset equity to initial
             risk.equity = float(risk.risk.get("initial_paper_balance", 10000.0))
             risk.start_of_day_equity = risk.equity
             risk.realized_pnl_today = 0.0
-            # Clear from DB
             s: Storage = _app_state["storage"]
-            if s._db is None:
-                await s.connect()
+            await _ensure_storage(s)
             await s.db.execute("UPDATE paper_trades SET status='closed', close_reason='reset' WHERE status='open'")
             await s.db.commit()
             return {"ok": True, "msg": f"{closed_count} پوزیشن بسته شد و موجودی ریست شد"}
@@ -806,14 +750,11 @@ def create_app(
 
     @app.post("/api/reset/trades")
     async def api_reset_trades() -> dict:
-        """Reset all trade history."""
         try:
             s: Storage = _app_state["storage"]
-            if s._db is None:
-                await s.connect()
+            await _ensure_storage(s)
             await s.db.execute("DELETE FROM paper_trades")
             await s.db.commit()
-            # Also reset equity
             risk: RiskEngine = _app_state["risk"]
             risk.equity = float(risk.risk.get("initial_paper_balance", 10000.0))
             risk.start_of_day_equity = risk.equity
@@ -825,7 +766,6 @@ def create_app(
 
     @app.post("/api/reset/success")
     async def api_reset_success() -> dict:
-        """Reset success rate tracker — clear all detections."""
         try:
             from core.hunter_tracker import get_hunter_tracker
             tracker = get_hunter_tracker()
@@ -837,7 +777,6 @@ def create_app(
 
     @app.post("/api/reset/universe")
     async def api_reset_universe() -> dict:
-        """Reset universe/watchlist."""
         try:
             _app_state["universe"] = {}
             return {"ok": True, "msg": "واچ‌لیست ریست شد"}
@@ -846,7 +785,6 @@ def create_app(
 
     @app.post("/api/reset/settings")
     async def api_reset_settings() -> dict:
-        """Reset settings to config.yaml defaults."""
         try:
             from config.settings import Settings
             s = Settings()
@@ -861,9 +799,9 @@ def create_app(
         await ws.accept()
         _app_state["ws_clients"].add(ws)
         try:
-            await ws.send_json({"type": "hi", "msg": "សប់ MemeCoin Sniper Dashboard"})
+            # FIX: greeting message was garbled — fixed to proper Persian
+            await ws.send_json({"type": "hi", "msg": "به MemeCoin Sniper Dashboard خوش آمدید"})
             while True:
-                # We mostly push; for keepalive and booted-in events handle client pings.
                 try:
                     msg = await asyncio.wait_for(ws.receive_text(), timeout=120)
                 except asyncio.TimeoutError:
@@ -886,7 +824,6 @@ def create_app(
         _lit_engine = LITEngine(settings.raw.get("lit", {}))
         _lit_lit_cfg = settings.raw.get("lit", {})
 
-        # Check pandas availability
         try:
             import pandas as _pd
             _HAS_PANDAS = True
@@ -918,7 +855,6 @@ def create_app(
                 return key in self._data
 
         def _to_df(ohlcv_list):
-            """Convert OHLCV list to _SimpleDF."""
             data = {
                 "open": [float(c.open) for c in ohlcv_list],
                 "high": [float(c.high) for c in ohlcv_list],
@@ -932,6 +868,7 @@ def create_app(
         @app.get("/api/lit/signals")
         async def api_lit_signals(days: int = 3) -> dict:
             s: Storage = _app_state["storage"]
+            await _ensure_storage(s)
             try:
                 import time as _time
                 cutoff = _time.time() - (days * 86400)
@@ -1067,7 +1004,6 @@ def create_app(
                             "zones": signal.zones, "entry_candle_idx": i, "exit_candle_idx": exit_candle,
                         })
 
-                # Deduplicate overlapping trades + enforce cooldown
                 filtered = []
                 last_exit = -cooldown_candles
                 for t in trades:
@@ -1131,7 +1067,7 @@ def create_app(
 
 
 async def broadcast(event: dict) -> None:
-    """Push event to all dashboard WS clients (used by ForwardEngine callbacks)."""
+    """Push event to all dashboard WS clients."""
     clients = list(_app_state.get("ws_clients", set()))
     dead = []
     for ws in clients:

@@ -77,7 +77,7 @@ SCHEMA = [
     CREATE TABLE IF NOT EXISTS assistant_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         ts REAL NOT NULL,
-        kind TEXT NOT NULL,            -- user | assistant
+        kind TEXT NOT NULL,
         text TEXT NOT NULL
     )
     """,
@@ -86,34 +86,51 @@ SCHEMA = [
     "CREATE INDEX IF NOT EXISTS idx_ticks_ts ON ticks(ts DESC)",
 ]
 
+# Migration columns — run once after base schema
+_MIGRATIONS_PAPER = [
+    "tp2 REAL",
+    "tp3 REAL",
+    "tp1_hit INTEGER DEFAULT 0",
+    "risk_free INTEGER DEFAULT 0",
+    "unrealized_pnl_pct REAL",
+]
+_MIGRATIONS_SIGNALS = [
+    "tp2 REAL",
+    "market_type TEXT DEFAULT 'futures'",
+]
+
 
 class Storage:
     def __init__(self, settings: Settings) -> None:
         self.s = settings
         self._db: Optional[aiosqlite.Connection] = None
 
+    @property
+    def is_connected(self) -> bool:
+        """Public guard used by server helpers instead of touching _db directly."""
+        return self._db is not None
+
     async def connect(self) -> None:
+        if self._db is not None:
+            return  # idempotent — safe to call multiple times
         self._db = await aiosqlite.connect(str(self.s.sqlite_path))
         await self._db.executescript(";".join(SCHEMA))
         await self._db.commit()
-        # enable WAL for concurrent reads while writer updates
         await self._db.execute("PRAGMA journal_mode=WAL;")
         await self._db.commit()
-        # Migration: add multi-TP columns if missing
-        for col in ["tp2 REAL", "tp3 REAL", "tp1_hit INTEGER DEFAULT 0",
-                     "risk_free INTEGER DEFAULT 0", "unrealized_pnl_pct REAL"]:
+        # FIX: migrations with explicit logging instead of silent pass
+        for col in _MIGRATIONS_PAPER:
             try:
                 await self._db.execute(f"ALTER TABLE paper_trades ADD COLUMN {col}")
                 await self._db.commit()
-            except Exception:
-                pass  # column already exists
-        # Migration: add tp2 to signals table
-        for col in ["tp2 REAL", "market_type TEXT DEFAULT 'futures'"]:
+            except aiosqlite.OperationalError:
+                pass  # column already exists — expected
+        for col in _MIGRATIONS_SIGNALS:
             try:
                 await self._db.execute(f"ALTER TABLE signals ADD COLUMN {col}")
                 await self._db.commit()
-            except Exception:
-                pass  # column already exists
+            except aiosqlite.OperationalError:
+                pass  # column already exists — expected
 
     async def close(self) -> None:
         if self._db is not None:
@@ -122,7 +139,8 @@ class Storage:
 
     @property
     def db(self) -> aiosqlite.Connection:
-        assert self._db is not None, "Storage not connected"
+        if self._db is None:
+            raise RuntimeError("Storage.connect() has not been awaited yet")
         return self._db
 
     # ------------------------------------------ signals
@@ -144,7 +162,6 @@ class Storage:
         await self.db.commit()
 
     async def get_last_signal(self, symbol: str, minutes: int = 15) -> Optional[dict]:
-        """Get the last signal for a symbol within the last N minutes."""
         cutoff = time.time() - (minutes * 60)
         cur = await self.db.execute(
             "SELECT * FROM signals WHERE symbol=? AND created_at>? ORDER BY created_at DESC LIMIT 1",
@@ -157,7 +174,6 @@ class Storage:
         return dict(zip(cols, row))
 
     async def recent_signals(self, limit: int = 100) -> List[dict]:
-        """Get recent signal-type signals only (excludes scalp signals with SCP_ prefix)."""
         cur = await self.db.execute(
             "SELECT * FROM signals WHERE id NOT LIKE 'SCP_%' ORDER BY created_at DESC LIMIT ?", (limit,)
         )
@@ -172,7 +188,6 @@ class Storage:
         return out
 
     async def update_signal_status(self, signal_id: str, status: str) -> None:
-        """Update signal status (open -> tp/sl/trailing/closed)."""
         await self.db.execute(
             "UPDATE signals SET status=? WHERE id=?", (status, signal_id)
         )
@@ -180,7 +195,6 @@ class Storage:
 
     # ------------------------------------------ paper trades
     async def open_paper(self, pos: PaperPosition, signal_id: Optional[str] = None) -> None:
-        # Update signal_id on pos for later reference
         if signal_id:
             pos.signal_id = signal_id
         await self.db.execute(
@@ -208,7 +222,6 @@ class Storage:
              pos.stop_loss, pos.unrealized_pnl_pct, pos.id),
         )
         await self.db.commit()
-        # Auto-update signal status when position closes
         if pos.signal_id and pos.close_reason:
             await self.update_signal_status(pos.signal_id, pos.close_reason)
 
@@ -260,12 +273,11 @@ class Storage:
 
     # ------------------------------------------ time-based win rates
     async def get_time_win_rates(self) -> dict:
-        """Calculate win rates for different time windows: daily, hourly, 4-hour."""
         now = time.time()
         windows = {
-            "daily": 86400,       # last 24 hours
-            "hourly": 3600,       # last 1 hour
-            "4hour": 14400,       # last 4 hours
+            "daily": 86400,
+            "hourly": 3600,
+            "4hour": 14400,
         }
         result = {}
         for label, seconds in windows.items():
@@ -276,12 +288,11 @@ class Storage:
                 (cutoff,)
             )
             rows = await cur.fetchall()
-            # Only count CLOSED trades (pnl_pct IS NOT NULL) for win rate
             closed_rows = [(p, pnl, r, o) for p, pnl, r, o in rows if p is not None]
             wins = sum(1 for p, _, _, _ in closed_rows if p > 0)
             losses = sum(1 for p, _, _, _ in closed_rows if p < 0)
             open_count = sum(1 for p, _, _, _ in rows if p is None)
-            total = len(closed_rows)  # only closed trades
+            total = len(closed_rows)
             total_pnl_pct = sum(p for p, _, _, _ in closed_rows)
             total_pnl_usdt = sum(pnl for _, pnl, _, _ in closed_rows)
             win_rate = (wins / total * 100) if total > 0 else 0
@@ -299,7 +310,6 @@ class Storage:
                 "total_pnl_usdt": round(total_pnl_usdt, 2),
             }
 
-        # Also compute overall (all time) — only closed trades
         cur = await self.db.execute(
             "SELECT pnl_pct, pnl_usdt FROM paper_trades WHERE pnl_pct IS NOT NULL"
         )
@@ -323,7 +333,6 @@ class Storage:
 
     # ------------------------------------------ scalping signals
     async def recent_scalp_signals(self, limit: int = 100) -> List[dict]:
-        """Get recent scalping signals (IDs starting with SCP_)."""
         cur = await self.db.execute(
             "SELECT * FROM signals WHERE id LIKE 'SCP_%' ORDER BY created_at DESC LIMIT ?",
             (limit,),
@@ -339,7 +348,6 @@ class Storage:
         return out
 
     async def get_scalp_win_rates(self) -> dict:
-        """Calculate win rates for scalping trades only."""
         now = time.time()
         windows = {
             "last_hour": 3600,
@@ -375,7 +383,6 @@ class Storage:
                 "total_pnl_usdt": round(total_pnl_usdt, 2),
             }
 
-        # Overall scalping stats
         cur = await self.db.execute(
             "SELECT pnl_pct, pnl_usdt FROM paper_trades WHERE signal_id LIKE 'SCP_%' AND pnl_pct IS NOT NULL"
         )

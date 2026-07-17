@@ -28,10 +28,15 @@ from core.logging_setup import setup_logging, logger
 from core.models import now_sec
 from core.risk import RiskEngine
 from core.storage import get_storage
-from core.forward_engine import ForwardEngine as FE  # noqa: F401  (alias clarity)
 from notify.telegram_bot import TelegramNotifier
-from server import create_app
-import server as server_module
+
+# FIX: import server relative to ROOT so both run modes work
+try:
+    from mems_sniper import server as server_module
+    from mems_sniper.server import create_app
+except ImportError:
+    import server as server_module  # type: ignore[no-redef]
+    from server import create_app  # type: ignore[no-redef]
 
 
 async def lifespan() -> None:
@@ -43,6 +48,9 @@ async def lifespan() -> None:
     risk = RiskEngine(settings)
     storage = get_storage()
 
+    # ensure storage is connected before use
+    await storage.connect()
+
     # Build FastAPI app with shared singletons
     app = create_app(em=em, risk=risk, storage=storage)
 
@@ -52,14 +60,17 @@ async def lifespan() -> None:
 
     # Forward engine (always-on)
     eng = ForwardEngine(settings, em, risk, storage, notify)
+
     # Register dashboard callbacks so engine pushes events to UI/WS clients.
     async def push_signals(evt: dict):
         await server_module.broadcast(evt)
+
     async def push_universe(universe):
         await server_module.broadcast({"type": "universe", "data": universe})
         # Merge rather than overwrite: CEX refresh sends {exchange: [...]},
         # DEX discovery sends {"dex": [...]} — both must coexist.
         server_module.get_state().setdefault("universe", {}).update(universe)
+
     eng.register_dashboard(push_signals, push_universe)
     # Also keep app_state["universe"] updated for /api/state consumers.
     await eng.start()
@@ -80,11 +91,17 @@ async def lifespan() -> None:
     try:
         await server.serve()
     finally:
+        # FIX: safe ordered shutdown — each step isolated so others still run
         await eng.stop()
-        if storage._db is not None:
+        try:
             await storage.close()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"storage close error: {exc}")
         if notify is not None:
-            await notify.stop()
+            try:
+                await notify.stop()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"notify stop error: {exc}")
 
 
 def main() -> None:
