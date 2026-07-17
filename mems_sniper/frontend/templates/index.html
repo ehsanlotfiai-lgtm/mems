@@ -169,10 +169,22 @@
             <div class="metric-card"><div class="metric-value" id="lit_live_best">—</div><div class="metric-label">⭐ بهترین امتیاز</div></div>
           </div>
 
-          <div style="display:grid;grid-template-columns:1fr 400px;gap:12px">
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <!-- نمودار (تمام عرض، بالا) -->
+            <div>
+              <div class="settings-card" style="padding:6px">
+                <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px">
+                  <span style="font-weight:bold;font-size:14px" id="lit_live_chart_title">📈 روی یک سیگنال کلیک کنید</span>
+                </div>
+                <div id="lit_live_chart_container" style="height:450px;width:100%"></div>
+              </div>
+            </div>
+
+            <!-- لیست سیگنال‌ها + جزئیات (زیر نمودار) -->
+            <div style="display:grid;grid-template-columns:1fr 380px;gap:12px">
             <!-- لیست سیگنال‌ها -->
             <div>
-              <div class="settings-card" style="padding:8px;margin-bottom:10px">
+              <div class="settings-card" style="padding:8px">
                 <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px">
                   <h3 style="margin:0">📡 سیگنال‌های لایو — ۱۰ روز اخیر</h3>
                   <select id="lit_live_filter" class="input" style="width:auto;height:32px;font-size:12px" onchange="renderLitLiveList()">
@@ -181,7 +193,7 @@
                     <option value="short">فقط شورت</option>
                   </select>
                 </div>
-                <div style="overflow-x:auto;max-height:500px;overflow-y:auto">
+                <div style="overflow-x:auto;max-height:400px;overflow-y:auto">
                   <table class="table" style="font-size:12px">
                     <thead style="position:sticky;top:0;background:#161b22;z-index:1">
                       <tr>
@@ -197,21 +209,16 @@
               </div>
             </div>
 
-            <!-- نمودار + جزئیات -->
+            <!-- جزئیات سیگنال -->
             <div>
-              <div class="settings-card" style="padding:6px;margin-bottom:10px">
-                <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px">
-                  <span style="font-weight:bold;font-size:13px" id="lit_live_chart_title">📈 روی یک سیگنال کلیک کنید</span>
-                </div>
-                <div id="lit_live_chart_container" style="height:520px"></div>
-              </div>
-              <div class="settings-card" style="position:sticky;top:60px;max-height:400px;overflow-y:auto;padding:12px">
+              <div class="settings-card" style="max-height:450px;overflow-y:auto;padding:12px">
                 <div id="lit_live_detail">
                   <p style="color:var(--text-muted);font-size:13px;line-height:1.8;text-align:center;padding:20px 0">
                     روی هر سیگنال کلیک کنید تا نمودار و تحلیل کامل نمایش داده شود
                   </p>
                 </div>
               </div>
+            </div>
             </div>
           </div>
         </div>
