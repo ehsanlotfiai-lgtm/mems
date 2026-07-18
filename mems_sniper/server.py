@@ -17,7 +17,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import List, Optional
+import time
+from typing import Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -983,6 +984,109 @@ def create_app(
             }
             return _SimpleDF(data)
 
+        async def _resolve_lit_outcomes(s: Storage, signals: List[dict]) -> None:
+            """LIT positions never go through the shared RiskEngine's paper-trade
+            tracking reliably (it shares one global max_open_positions cap with
+            the main + scalp engines, so a LIT signal can be created but its
+            PaperPosition silently dropped) — meaning signals.status is
+            frequently stuck at the DB default 'open' forever, even long after
+            price has clearly hit TP or SL. This walks REAL candle history
+            since each open signal's created_at and resolves + PERSISTS the
+            true outcome directly from price action, independent of whether a
+            paper trade was ever tracked. Mutates `signals` in place and
+            writes the resolved status back to the DB so it's stable next time.
+            """
+            open_sigs = [d for d in signals if (d.get("status") or "open") == "open"]
+            if not open_sigs:
+                return
+            em: ExchangeManager = _app_state["em"]
+            if "binance" not in em.clients:
+                try:
+                    await em.start()
+                except Exception:
+                    return
+
+            by_symbol: Dict[str, List[dict]] = {}
+            for d in open_sigs:
+                by_symbol.setdefault(d["symbol"], []).append(d)
+
+            now = time.time()
+            tf_seconds = 900  # LIT trigger TF is 15m
+            for symbol, sigs in by_symbol.items():
+                oldest_created = min(d["created_at"] for d in sigs)
+                age_bars = int((now - oldest_created) / tf_seconds) + 5
+                limit = max(20, min(1000, age_bars))
+                try:
+                    candles = await em.fetch_ohlcv("binance", symbol, "15m", limit=limit)
+                except Exception:
+                    continue
+                if not candles:
+                    continue
+                for d in sigs:
+                    entry = d.get("entry") or 0
+                    sl = d.get("stop_loss") or 0
+                    tp = d.get("take_profit") or 0
+                    tp2 = d.get("tp2") or 0
+                    side = d.get("side")
+                    created_at = d.get("created_at") or 0
+                    if not (entry and sl and tp and side):
+                        continue
+                    resolved_status = None
+                    exit_price = None
+                    exit_time = None
+                    for c in candles:
+                        c_ts = c.timestamp / 1000 if c.timestamp > 1e12 else c.timestamp
+                        if c_ts < created_at:
+                            continue
+                        if side == "long":
+                            # Conservative: if a candle's range covers BOTH SL and
+                            # TP (large wick), assume SL hit first (worse case).
+                            hit_sl = c.low <= sl
+                            hit_tp2 = tp2 and c.high >= tp2
+                            hit_tp = c.high >= tp
+                            if hit_sl:
+                                resolved_status = "sl"
+                                exit_price = sl
+                                exit_time = c_ts
+                                break
+                            if hit_tp2:
+                                resolved_status = "tp2"
+                                exit_price = tp2
+                                exit_time = c_ts
+                                break
+                            if hit_tp:
+                                resolved_status = "tp1"
+                                exit_price = tp
+                                exit_time = c_ts
+                                break
+                        else:  # short
+                            hit_sl = c.high >= sl
+                            hit_tp2 = tp2 and c.low <= tp2
+                            hit_tp = c.low <= tp
+                            if hit_sl:
+                                resolved_status = "sl"
+                                exit_price = sl
+                                exit_time = c_ts
+                                break
+                            if hit_tp2:
+                                resolved_status = "tp2"
+                                exit_price = tp2
+                                exit_time = c_ts
+                                break
+                            if hit_tp:
+                                resolved_status = "tp1"
+                                exit_price = tp
+                                exit_time = c_ts
+                                break
+                    if resolved_status:
+                        d["status"] = resolved_status
+                        d["exit_price"] = exit_price
+                        d["exit_time"] = exit_time
+                        try:
+                            await s.update_signal_status(d["id"], resolved_status)
+                        except Exception:
+                            pass
+
         @app.get("/api/lit/signals")
         async def api_lit_signals(days: int = 10) -> dict:
             s: Storage = _app_state["storage"]
@@ -1039,9 +1143,24 @@ def create_app(
                                 continue  # Skip signal with tiny TP
 
                     signals.append(d)
+
+                # Resolve stale "open" statuses from real candle history so
+                # positions that already hit TP/SL stop showing as "فعال" and
+                # win-rate stats become meaningful.
+                try:
+                    await _resolve_lit_outcomes(s, signals)
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(f"LIT outcome resolution failed: {exc}")
+
                 return {"signals": signals, "count": len(signals)}
             except Exception as exc:
                 return {"signals": [], "error": str(exc)}
+
+        @app.get("/api/lit/win-rates")
+        async def api_lit_win_rates() -> dict:
+            s: Storage = _app_state["storage"]
+            await _ensure_storage(s)
+            return {"win_rates": await s.get_lit_win_rates()}
 
         @app.get("/api/lit/candles/{symbol:path}")
         async def api_lit_candles(symbol: str, timeframe: str = "15m", limit: int = 200) -> dict:

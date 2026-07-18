@@ -413,6 +413,53 @@ class Storage:
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, r)) for r in rows]
 
+    async def get_lit_win_rates(self) -> dict:
+        """Win-rate stats for LIT signals, computed from signals.status (NOT
+        paper_trades — LIT positions frequently never get a tracked
+        PaperPosition because they share the same global max_open_positions
+        cap with the main/scalp engines, so paper_trades often has no row
+        for a LIT signal at all). api_lit_signals() resolves+persists the
+        real outcome onto signals.status by checking candle history, and
+        this function reads that persisted status."""
+        now = time.time()
+        windows = {"last_hour": 3600, "last_4h": 14400, "today": 86400}
+        result = {}
+        win_statuses = ("tp", "tp1", "tp2", "tp3")
+        loss_statuses = ("sl", "sl_risk_free")
+        for label, seconds in windows.items():
+            cutoff = now - seconds
+            cur = await self.db.execute(
+                "SELECT status FROM signals WHERE id LIKE 'LIT_%' AND created_at >= ?",
+                (cutoff,),
+            )
+            rows = await cur.fetchall()
+            statuses = [r[0] or "open" for r in rows]
+            wins = sum(1 for st in statuses if st in win_statuses)
+            losses = sum(1 for st in statuses if st in loss_statuses)
+            open_count = sum(1 for st in statuses if st == "open")
+            total = wins + losses
+            result[label] = {
+                "total": total,
+                "open": open_count,
+                "wins": wins,
+                "losses": losses,
+                "win_rate": round((wins / total * 100) if total > 0 else 0, 1),
+            }
+
+        cur = await self.db.execute("SELECT status FROM signals WHERE id LIKE 'LIT_%'")
+        rows = await cur.fetchall()
+        statuses = [r[0] or "open" for r in rows]
+        wins = sum(1 for st in statuses if st in win_statuses)
+        losses = sum(1 for st in statuses if st in loss_statuses)
+        total = wins + losses
+        result["all"] = {
+            "total": total,
+            "wins": wins,
+            "losses": losses,
+            "win_rate": round((wins / total * 100) if total > 0 else 0, 1),
+        }
+        return result
+
     async def get_scalp_win_rates(self) -> dict:
         now = time.time()
         windows = {

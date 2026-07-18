@@ -446,9 +446,11 @@ scalping:
       enabled: true
       weight: 1.3
       lookback: 20
-      min_displacement_atr: 1.5
-      ema_filter_period: 60
-      min_volume_ratio: 1.3
+      min_spike_bars: 2
+      min_spike_body_atr: 0.8
+      max_spike_wick_ratio: 0.25
+      min_rr: 1.5
+      max_attempts: 3
     scalp_pro_btb:
       enabled: true
       weight: 1.4

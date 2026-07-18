@@ -610,8 +610,120 @@ def _is_doji(open_val: float, high_val: float, low_val: float, close_val: float,
     return (body / rng) <= max_body_ratio
 
 
+def _is_inside_bar(high, low, ref_idx: int, idx: int) -> bool:
+    """True if candle `idx`'s range is fully contained within candle `ref_idx`'s range."""
+    if idx <= ref_idx or idx >= len(high):
+        return False
+    return float(high.iloc[idx]) <= float(high.iloc[ref_idx]) and float(low.iloc[idx]) >= float(low.iloc[ref_idx])
+
+
+def _detect_micro_channel(open_, high, low, close, spike_end_idx: int, direction: str,
+                           max_body_ratio_vs_spike: float = 0.65, max_channel_bars: int = 8):
+    """MicroMap 'micro-channel' detector (poursamadi.com/micromap/ step 1):
+
+    After a spike ends at `spike_end_idx`, a valid MicroMap setup requires a
+    small COUNTER-TREND micro-channel to form immediately after it:
+      - direction == "bullish" (spike was up)  -> channel makes LOWER HIGHS
+      - direction == "bearish" (spike was down) -> channel makes HIGHER LOWS
+      - every micro-channel candle's body must be smaller than the spike
+        candle's body (compressed / low-energy pullback, per the official
+        description "اندازه‌ی کندل‌ها کوچک‌تر از کندل اسپایک")
+    Requires >= 2 channel candles (a single candle cannot demonstrate a
+    "making lower highs" *trend*). Returns (start_idx, end_idx) inclusive,
+    or None if no valid micro-channel forms right after the spike.
+    """
+    spike_body = abs(float(close.iloc[spike_end_idx]) - float(open_.iloc[spike_end_idx]))
+    if spike_body <= 0:
+        return None
+    max_candle_body = spike_body * max_body_ratio_vs_spike
+
+    channel_indices: list = []
+    prev_high = prev_low = None
+    i = spike_end_idx + 1
+    n = len(close)
+    while i < n and len(channel_indices) < max_channel_bars:
+        o, h, l, c = float(open_.iloc[i]), float(high.iloc[i]), float(low.iloc[i]), float(close.iloc[i])
+        body = abs(c - o)
+        if body > max_candle_body:
+            break  # candle too strong -> this is a breakout attempt, not a pullback candle
+        if direction == "bullish":
+            if prev_high is not None and h >= prev_high:
+                break  # must make a strictly LOWER high to remain a valid micro-channel
+        else:
+            if prev_low is not None and l <= prev_low:
+                break  # must make a strictly HIGHER low
+        channel_indices.append(i)
+        prev_high, prev_low = h, l
+        i += 1
+
+    if len(channel_indices) < 2:
+        return None
+    return (channel_indices[0], channel_indices[-1])
+
+
+def _simulate_micromap_entries(high, low, ref_idx: int, direction: str, n: int, max_attempts: int = 3):
+    """MicroMap's 3-sequential-attempt entry system (poursamadi.com/micromap/ step 2):
+
+    Entry 1: breakout of the reference candle's high (bullish) / low (bearish).
+             SL: that same reference candle's own low / high.
+    Entry 2: ONLY if Entry 1 gets stopped out — wait for the next fresh
+             candle to form, then enter on breakout of ITS high/low, with
+             SL at its own low/high.
+    Entry 3: same retry pattern once more if Entry 2 also stops out.
+    After a 3rd failed attempt the setup is fully invalidated (no signal).
+
+    Returns (entry_level, sl_level, attempt_number) if the LAST candle in
+    the series (index n-1) is exactly the live breakout candle for the
+    currently active attempt, else None (no breakout yet / already
+    triggered on an earlier candle / setup invalidated).
+    """
+    attempt = 1
+    if direction == "bullish":
+        entry_level = float(high.iloc[ref_idx])
+        sl_level = float(low.iloc[ref_idx])
+    else:
+        entry_level = float(low.iloc[ref_idx])
+        sl_level = float(high.iloc[ref_idx])
+
+    i = ref_idx + 1
+    while i < n:
+        hi, lo = float(high.iloc[i]), float(low.iloc[i])
+        breakout = (hi >= entry_level) if direction == "bullish" else (lo <= entry_level)
+        if not breakout:
+            i += 1
+            continue
+        if i == n - 1:
+            return (entry_level, sl_level, attempt)  # live signal right now
+
+        # This breakout already happened on a past candle — was it stopped out?
+        stop_idx = None
+        for j in range(i + 1, n):
+            lo_j, hi_j = float(low.iloc[j]), float(high.iloc[j])
+            hit_stop = (lo_j <= sl_level) if direction == "bullish" else (hi_j >= sl_level)
+            if hit_stop:
+                stop_idx = j
+                break
+        if stop_idx is None:
+            return None  # a past entry is still open — nothing new to signal right now
+        attempt += 1
+        if attempt > max_attempts:
+            return None  # 3 failed attempts -> setup fully invalidated
+        new_ref = stop_idx + 1
+        if new_ref >= n:
+            return None  # the fresh candle for the next attempt hasn't formed yet
+        if direction == "bullish":
+            entry_level = float(high.iloc[new_ref])
+            sl_level = float(low.iloc[new_ref])
+        else:
+            entry_level = float(low.iloc[new_ref])
+            sl_level = float(high.iloc[new_ref])
+        i = new_ref + 1
+    return None
+
+
 def _detect_spike_run(open_, close, high, low, atr, n, direction, min_bars, min_body_atr,
-                       max_doji_ratio_in_spike=0.3, scan_window=15, scan_start=None):
+                       max_doji_ratio_in_spike=0.3, scan_window=15, scan_start=None,
+                       max_opposing_wick_ratio: float | None = None):
     """Detect a spike: a run of >= min_bars candles moving in `direction` with
     body >= min_body_atr * ATR, tolerating a limited fraction of doji candles
     (per SP2L/PRO BTB 'Doji Tolerance' filter). Returns (start_idx, end_idx) of the
@@ -651,6 +763,15 @@ def _detect_spike_run(open_, close, high, low, atr, n, direction, min_bars, min_
                 continue
 
             if body_ratio >= min_body_atr and is_dir:
+                # MicroMap requires "clean" spike candles (close near the
+                # extreme, no deep opposing wicks) per the official spec:
+                # "بسته شدن در نزدیکی سقف/کف، بدون سایه‌های عمیق".
+                if max_opposing_wick_ratio is not None:
+                    rng = h - l
+                    if rng > 0:
+                        opposing_wick = (o - l) if direction == "bullish" else (h - o)
+                        if opposing_wick / rng > max_opposing_wick_ratio:
+                            break
                 count += 1
                 end = i
             else:
@@ -666,23 +787,39 @@ def _detect_spike_run(open_, close, high, low, atr, n, direction, min_bars, min_
 # 11) MicroMap — Institutional Breakout Zone (FVG) + Pullback Retest
 # ==========================================================
 class ScalpMicroMap(BaseScalpStrategy):
-    """MicroMap Strategy: Institutional breakout-zone scalper (1-15m).
+    """MicroMap Strategy — faithful implementation of Mohammad Ali Poursamadi's
+    official 'MicroMAP' spike-cycle methodology (poursamadi.com/micromap/),
+    the 3rd and most advanced strategy in his Spike-Cycle series (after
+    SP2L and Pro BTB).
 
-    Faithful to the 'Institutional Breakout Zone' model:
-    1. Institutional Breakout Zone Detection — a displacement candle that
-       creates a genuine imbalance (Fair Value Gap), not just an arbitrary
-       ATR offset. The zone = the FVG itself (top/bottom of the gap).
-    2. Multi-timeframe EMA filter — the breakout must align with the
-       higher-level trend (EMA(60) on trigger TF acts as the bias filter).
-    3. Strict Dual Confirmation Entry:
-         a) Confirmed pullback retest of the validated FVG zone, OR
-         b) A clean inside bar fully contained within the zone.
-       Both must align with the breakout direction.
-    4. Volume confirmation is a hard gate (not just a bonus) — the
-       displacement candle must show above-average volume, matching the
-       'institutional' premise of the strategy.
+    Official structure (verified against the source page):
+    1. SETUP DETECTION — a strong, CLEAN spike (large bodies, closes near
+       the extreme, no deep opposing wicks — "بدون سایه‌های عمیق"), followed
+       immediately by a small COUNTER-TREND "micro-channel":
+         - after a bullish spike: a run of >=2 candles making LOWER HIGHS
+         - after a bearish spike: a run of >=2 candles making HIGHER LOWS
+         - every micro-channel candle's body must be smaller than the
+           spike candle's body ("اندازه‌ی کندل‌ها کوچک‌تر از کندل اسپایک")
+       Once the last micro-channel candle forms, the setup is ready.
+    2. THREE SEQUENTIAL ENTRY ATTEMPTS — the core of the official method:
+         Entry 1: breakout of the last micro-channel candle's high/low,
+                  SL behind that same candle's low/high.
+         Entry 2 (only if Entry 1 is stopped out): wait for a new candle,
+                  breakout of ITS high/low, SL at its own low/high. Per
+                  the source page this entry has a HIGHER win rate than
+                  Entry 1 ("این ورود وین‌ریت بالاتری نسبت به ورود اول دارد").
+         Entry 3 (only if Entry 2 is stopped out): same retry pattern.
+         If Entry 3 is also stopped out, the setup is FULLY INVALIDATED
+         ("ستاپ MicroMAP کاملاً باطل است") — no more entries are taken.
+    TP is not fixed by the source (price-action only); we use a
+    configurable minimum R:R (default 1.5) as the profit target.
 
-    Timeframe: 1m-15m (scalp).
+    The previous implementation only checked for a single FVG + generic
+    retest/inside-bar, which does NOT match this official 3-attempt
+    micro-channel system at all — that mismatch is almost certainly why
+    it under-performed. This rewrite implements the real methodology.
+
+    Timeframe: 1m-15m (scalp), no indicators needed per the source.
     """
     name = "scalp_micromap"
     default_weight = 1.3
@@ -696,110 +833,74 @@ class ScalpMicroMap(BaseScalpStrategy):
         high = df["high"].astype(float)
         low = df["low"].astype(float)
         volume = df["volume"].astype(float)
-
-        lookback = int(self.params.get("lookback", 20))
-        min_displacement_atr = float(self.params.get("min_displacement_atr", 1.5))
-        ema_period = int(self.params.get("ema_filter_period", 60))
-        min_vol_ratio = float(self.params.get("min_volume_ratio", 1.3))
+        n = len(close)
 
         atr_val = float(ind.atr(high, low, close, 14).iloc[-1])
         if atr_val <= 0:
             return None
 
-        n = len(close)
+        min_spike_bars = int(self.params.get("min_spike_bars", 2))
+        min_spike_body_atr = float(self.params.get("min_spike_body_atr", 0.8))
+        max_spike_wick_ratio = float(self.params.get("max_spike_wick_ratio", 0.25))
+        lookback = int(self.params.get("lookback", 20))
+        min_rr = float(self.params.get("min_rr", 1.5))
+        max_attempts = int(self.params.get("max_attempts", 3))
 
-        # ── EMA bias filter (multi-timeframe institutional filter) ──
-        ema_val = ind.ema(close, min(ema_period, n - 1))
-        htf_bias = "bullish" if float(close.iloc[-1]) > float(ema_val.iloc[-1]) else "bearish"
-
-        # ── Step 1: Find the most recent displacement candle that created a real FVG ──
-        displacement_idx = -1
-        displacement_dir = ""
-        fvg_zone = None
-        search_start = max(2, n - lookback)
-        for i in range(n - 2, search_start - 1, -1):
-            o, h, l, c = float(open_.iloc[i]), float(high.iloc[i]), float(low.iloc[i]), float(close.iloc[i])
-            body = abs(c - o)
-            rng = h - l
-            if rng <= 0:
+        for direction in ("bullish", "bearish"):
+            # ── Step 1a: find a clean, strong spike ──
+            spike = _detect_spike_run(
+                open_, close, high, low, atr_val, n, direction,
+                min_spike_bars, min_spike_body_atr,
+                scan_window=lookback, max_opposing_wick_ratio=max_spike_wick_ratio,
+            )
+            if spike is None:
                 continue
-            body_atr = body / atr_val
-            body_range = body / rng
-            if body_atr < min_displacement_atr or body_range < 0.55:
+            _, spike_end = spike
+
+            # ── Step 1b: micro-channel must form right after the spike ──
+            micro = _detect_micro_channel(open_, high, low, close, spike_end, direction)
+            if micro is None:
                 continue
+            channel_start, channel_end = micro
 
-            direction = "bullish" if c > o else "bearish"
-            # Reject if it goes against the higher-TF bias (institutional filter)
-            if direction != htf_bias:
+            # ── Step 2: simulate the 3-attempt sequential entry system,
+            #    referencing the LAST micro-channel candle as the first
+            #    breakout trigger ──
+            result = _simulate_micromap_entries(
+                high, low, channel_end, direction, n, max_attempts=max_attempts,
+            )
+            if result is None:
                 continue
+            entry_level, sl_level, attempt = result
 
-            fvg = _find_fvg_bullish(open_, high, low, close, i) if direction == "bullish" \
-                else _find_fvg_bearish(open_, high, low, close, i)
-            if fvg is None:
-                continue  # No genuine imbalance -> not a valid institutional zone
-
-            # Volume gate — hard requirement, not a bonus
-            vol_avg = float(volume.iloc[max(0, i - 20):i].mean()) if i > 0 else 0
-            if vol_avg <= 0 or float(volume.iloc[i]) / vol_avg < min_vol_ratio:
+            risk = abs(entry_level - sl_level)
+            if risk <= 0:
                 continue
+            side = "long" if direction == "bullish" else "short"
+            tp_level = entry_level + risk * min_rr if side == "long" else entry_level - risk * min_rr
 
-            displacement_idx = i
-            displacement_dir = direction
-            fvg_zone = fvg  # (top, bottom)
-            break
+            vol_avg = volume.rolling(20).mean().iloc[-1]
+            vol_ratio = float(volume.iloc[-1] / vol_avg) if vol_avg > 0 else 1.0
+            channel_len = channel_end - channel_start + 1
 
-        if displacement_idx < 0 or fvg_zone is None:
-            return None
+            # Per the source page, Entry 2 has the HIGHEST win rate (a
+            # validated 2nd breakout after the 1st fails), Entry 1 is the
+            # fastest/cleanest reaction, and Entry 3 is the last, riskiest
+            # chance before full invalidation.
+            base_scores = {1: 0.60, 2: 0.66, 3: 0.52}
+            base = base_scores.get(attempt, 0.52)
+            score = float(np.clip(
+                base + 0.10 * min(vol_ratio / 2, 1) + 0.06 * min(channel_len / 4, 1),
+                0, 1,
+            ))
 
-        zone_top, zone_bottom = fvg_zone
-        if zone_top <= zone_bottom:
-            return None
-
-        # ── Step 2: Wait for pullback into the FVG zone ──
-        current = float(close.iloc[-1])
-        in_zone = zone_bottom <= current <= zone_top
-
-        last = df.iloc[-1]
-        prev = df.iloc[-2]
-        confirmed = False
-
-        if displacement_dir == "bullish":
-            # a) Confirmed retest: price dips into the zone and closes back above it
-            retest_ok = float(last.low) <= zone_top and float(last.close) > zone_bottom and float(last.close) >= float(last.open)
-            # b) Inside bar fully inside the FVG zone
-            inside_bar_ok = (float(prev.high) <= zone_top and float(prev.low) >= zone_bottom and
-                             float(last.high) <= float(prev.high) and float(last.low) >= float(prev.low))
-            confirmed = retest_ok or inside_bar_ok
-        else:
-            retest_ok = float(last.high) >= zone_bottom and float(last.close) < zone_top and float(last.close) <= float(last.open)
-            inside_bar_ok = (float(prev.high) <= zone_top and float(prev.low) >= zone_bottom and
-                             float(last.high) <= float(prev.high) and float(last.low) >= float(prev.low))
-            confirmed = retest_ok or inside_bar_ok
-
-        if not (in_zone or confirmed):
-            return None
-        if not confirmed:
-            return None
-
-        side = "long" if displacement_dir == "bullish" else "short"
-        vol_avg2 = volume.rolling(20).mean().iloc[-1]
-        vol_ratio = float(volume.iloc[-1] / vol_avg2) if vol_avg2 > 0 else 1.0
-
-        # Score: base + EMA-alignment bonus + volume bonus + zone-tightness bonus
-        zone_tightness = 1.0 - min((zone_top - zone_bottom) / max(atr_val, 1e-10) / 2.0, 0.5)
-        score = float(np.clip(
-            0.58 + 0.12 * min(vol_ratio / 2, 1) + 0.10 * zone_tightness + 0.08,
-            0, 1,
-        ))
-
-        return StrategyHit(self.name, ctx.get("timeframe", "?"),
-                           score=round(score, 4), weight=self.weight,
-                           detail={"side": side, "zone_top": round(zone_top, 6),
-                                   "zone_bottom": round(zone_bottom, 6),
-                                   "htf_bias": htf_bias,
-                                   "displacement_atr": round(min_displacement_atr, 2),
-                                   "vol_ratio": round(vol_ratio, 2),
-                                   "setup": "micromap"})
+            return StrategyHit(self.name, ctx.get("timeframe", "?"),
+                               score=round(score, 4), weight=self.weight,
+                               detail={"side": side, "entry": round(entry_level, 6),
+                                       "sl": round(sl_level, 6), "tp": round(tp_level, 6),
+                                       "attempt": attempt, "channel_bars": channel_len,
+                                       "vol_ratio": round(vol_ratio, 2), "setup": "micromap"})
+        return None
 
 
 # ==========================================================

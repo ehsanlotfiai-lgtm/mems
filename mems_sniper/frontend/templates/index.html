@@ -158,6 +158,17 @@
           <button class="btn scalp-filter-btn" data-filter="setup_micromap" onclick="setScalpFilter('setup_micromap')">🎯 MicroMap</button>
           <button class="btn scalp-filter-btn" data-filter="setup_pro_btb" onclick="setScalpFilter('setup_pro_btb')">🔄 PRO BTB</button>
           <button class="btn scalp-filter-btn" data-filter="setup_sp2l" onclick="setScalpFilter('setup_sp2l')">📈 SP2L</button>
+          <span style="width:1px;height:20px;background:rgba(255,255,255,0.2);margin:0 4px"></span>
+          <button class="btn scalp-filter-btn" data-filter="setup_vwap_rejection" onclick="setScalpFilter('setup_vwap_rejection')">📐 واپس ریجکشن</button>
+          <button class="btn scalp-filter-btn" data-filter="setup_rsi_extreme" onclick="setScalpFilter('setup_rsi_extreme')">📊 RSI اکستریم</button>
+          <button class="btn scalp-filter-btn" data-filter="setup_momentum_burst" onclick="setScalpFilter('setup_momentum_burst')">🔥 انفجار مومنتوم</button>
+          <button class="btn scalp-filter-btn" data-filter="setup_stoch_extreme" onclick="setScalpFilter('setup_stoch_extreme')">📊 استوکاستیک اکستریم</button>
+          <button class="btn scalp-filter-btn" data-filter="setup_ema_ribbon" onclick="setScalpFilter('setup_ema_ribbon')">📈 ریبون EMA</button>
+          <button class="btn scalp-filter-btn" data-filter="setup_bb_touch" onclick="setScalpFilter('setup_bb_touch')">🎯 لمس بولینگر</button>
+          <button class="btn scalp-filter-btn" data-filter="setup_volume_climax" onclick="setScalpFilter('setup_volume_climax')">🔊 کلایمکس حجم</button>
+          <button class="btn scalp-filter-btn" data-filter="setup_order_flow" onclick="setScalpFilter('setup_order_flow')">⚖️ جریان سفارش</button>
+          <button class="btn scalp-filter-btn" data-filter="setup_squeeze_release" onclick="setScalpFilter('setup_squeeze_release')">💎 ریلیز Squeeze</button>
+          <button class="btn scalp-filter-btn" data-filter="setup_engulfing" onclick="setScalpFilter('setup_engulfing')">🕯️ انگالفینگ</button>
         </div>
 
         <!-- Live Scalp Signals -->
@@ -216,6 +227,9 @@
             <div class="metric-card"><div class="metric-value" id="lit_live_symbols">—</div><div class="metric-label">🪙 نمادهای مختلف</div></div>
             <div class="metric-card"><div class="metric-value" id="lit_live_best">—</div><div class="metric-label">⭐ بهترین امتیاز</div></div>
           </div>
+
+          <!-- وین ریت LIT — تا بازده استراتژی مشخص شود -->
+          <div id="lit_win_rates" class="pos-winrate-grid" style="margin-bottom:12px"></div>
 
           <div style="display:flex;flex-direction:column;gap:12px">
             <!-- نمودار (تمام عرض، بالا) -->

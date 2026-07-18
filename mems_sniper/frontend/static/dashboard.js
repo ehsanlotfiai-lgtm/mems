@@ -1231,6 +1231,39 @@ async function showSignalOnChart(signalId) {
       signalMarkers.push({ price: tpPrice, color: '#34d399', dashed: true, label: '✅ TP' });
     }
 
+    // ─── Entry / exit MARKERS on the timeline (arrow at entry candle, circle
+    // at exit candle) — price lines above only show WHERE the level is, not
+    // WHEN entry/exit happened. Mirrors showScalpTradeOnChart's pattern. ───
+    const side = sig.side;
+    const entryTime = Math.floor(markers.created_at || sig.created_at || 0);
+    const chartMarkers = [];
+    if (entryTime > 0) {
+      chartMarkers.push({
+        time: entryTime, position: side === 'long' ? 'belowBar' : 'aboveBar',
+        color: side === 'long' ? '#22c55e' : '#ef4444',
+        shape: side === 'long' ? 'arrowUp' : 'arrowDown',
+        text: `🕐 ورود (${side === 'long' ? 'LONG' : 'SHORT'})`,
+      });
+    }
+    const statusFa3 = { tp: 'TP', tp1: 'TP1', tp2: 'TP2', tp3: 'TP3', sl: 'SL', sl_risk_free: 'SL (ریسک‌فری)', timeout: 'تایم‌اوت' };
+    const sigStatus = sig.status || 'open';
+    if (['tp', 'tp1', 'tp2', 'tp3', 'sl', 'sl_risk_free', 'timeout'].includes(sigStatus) && candles.length) {
+      // No separate exit_time field on generic signals — approximate using
+      // the last available candle time so an exit marker is still visible
+      // rather than omitted entirely.
+      const lastCandleTime = Math.floor(candles[candles.length - 1].timestamp / 1000);
+      if (lastCandleTime > entryTime) {
+        const isWin = sigStatus.startsWith('tp');
+        chartMarkers.push({
+          time: lastCandleTime, position: side === 'long' ? 'aboveBar' : 'belowBar',
+          color: isWin ? '#22c55e' : '#ef4444', shape: 'circle',
+          text: `🏁 خروج (${statusFa3[sigStatus] || sigStatus})`,
+        });
+      }
+    }
+    chartMarkers.sort((a, b) => a.time - b.time);
+    try { candleSeries.setMarkers(chartMarkers); } catch (e) { console.warn('setMarkers error:', e); }
+
     // Show analysis panel + overlay on chart
     renderSignalAnalysis(sig, explanations, markers);
     renderChartOverlay(sig, explanations, markers);
@@ -1801,7 +1834,11 @@ function renderScalpStats(data) {
                 ${allTrades.slice(-15).reverse().map(t => {
                   const pnlC = t.pnl_pct >= 0 ? 'var(--success)' : 'var(--danger)';
                   const icon = t.pnl_pct >= 0 ? '✅' : '❌';
-                  return `<tr>
+                  const clickable = !!t.signal_id;
+                  const rowAttrs = clickable
+                    ? `style="cursor:pointer" onclick="showScalpTradeOnChart('${t.signal_id}')" title="کلیک کنید تا نمودار این معامله نمایش داده شود"`
+                    : '';
+                  return `<tr ${rowAttrs}>
                     <td>${t.signal_id || '—'}</td>
                     <td>${setupNames[t.setup] || t.setup}</td>
                     <td style="color:${pnlC};font-weight:bold">${t.pnl_pct >= 0 ? '+' : ''}${t.pnl_pct?.toFixed(2) || 0}%</td>
@@ -2375,6 +2412,38 @@ async function loadLitSignals() {
   } catch (e) {
     console.error('LIT signals error:', e);
   }
+  try {
+    const { win_rates } = await json('/api/lit/win-rates');
+    renderLitWinRates(win_rates);
+  } catch (e) {
+    console.error('LIT win-rates error:', e);
+  }
+}
+
+function renderLitWinRates(wr) {
+  const box = $('#lit_win_rates');
+  if (!box || !wr) return;
+  const periods = [
+    { key: 'last_hour', label: '⏰ آخرین ساعت' },
+    { key: 'last_4h', label: '🕓 آخرین ۴ ساعت' },
+    { key: 'today', label: '📅 امروز' },
+    { key: 'all', label: '🎯 کل' },
+  ];
+  box.innerHTML = periods.map(p => {
+    const d = wr[p.key] || {};
+    const wrVal = d.win_rate || 0;
+    const wrColor = wrVal >= 60 ? 'var(--success)' : wrVal >= 40 ? 'var(--accent)' : 'var(--danger)';
+    const detail = d.total > 0
+      ? `${d.wins} برد / ${d.losses} باخت از ${d.total} سیگنال بسته‌شده`
+      : 'هنوز سیگنال بسته‌شده‌ای ثبت نشده';
+    return `
+      <div class="pos-winrate-card">
+        <div class="wr-period">${p.label}</div>
+        <div class="wr-value" style="color:${d.total > 0 ? wrColor : 'var(--text-dim)'}">${d.total > 0 ? wrVal.toFixed(1) + '%' : '—'}</div>
+        <div class="wr-detail">${detail}</div>
+      </div>
+    `;
+  }).join('');
 }
 
 function renderLitLiveMetrics() {
@@ -2403,7 +2472,7 @@ function renderLitLiveList() {
     const strat = LIT_STRATEGY_NAMES[s.strategy]?.fa || s.strategy || 'LIT';
     const tf = s.timeframe || '15m';
     const status = s.status || 'open';
-    const statusFa = { open: '🟢 فعال', win: '✅ سود', loss: '❌ ضرر', expired: '⏰ منقضی' }[status] || status;
+    const statusFa = { open: '🟢 فعال', tp: '✅ سود', tp1: '✅ TP1', tp2: '✅ TP2', tp3: '✅ TP3', sl: '❌ ضرر', sl_risk_free: '🛡️ ریسک‌فری', win: '✅ سود', loss: '❌ ضرر', expired: '⏰ منقضی', timeout: '⏰ تایم‌اوت' }[status] || status;
     const time = s.created_at ? new Date(s.created_at * 1000).toLocaleString('fa-IR', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '—';
     const score = s.score ? s.score.toFixed(2) : '—';
     const scoreColor = s.score >= 0.8 ? 'var(--success)' : s.score >= 0.7 ? 'var(--info)' : 'var(--text-muted)';
@@ -2559,15 +2628,32 @@ async function showLitSignalOnChart(signalId) {
         });
       }
     } catch(e) {}
-    
+
+    // Exit marker — once the outcome is resolved from real candle history
+    // (see server-side _resolve_lit_outcomes), draw a circle at the exit
+    // candle so it's visually clear WHEN/WHERE the position actually closed.
+    const litStatusFa = { tp: 'TP', tp1: 'TP1', tp2: 'TP2', tp3: 'TP3', sl: 'SL', sl_risk_free: 'SL (ریسک‌فری)', timeout: 'تایم‌اوت' };
+    let exitTime = null;
+    if (sig.exit_time) {
+      exitTime = Math.floor(sig.exit_time);
+    }
+    if (exitTime && exitTime !== sigTime) {
+      const isWin = (sig.status || '').startsWith('tp');
+      markers.push({
+        time: exitTime, position: sig.side === 'long' ? 'aboveBar' : 'belowBar',
+        color: isWin ? '#22c55e' : '#ef4444', shape: 'circle',
+        text: `🏁 خروج (${litStatusFa[sig.status] || sig.status})`,
+      });
+    }
+
     try { litLiveCandleSeries.setMarkers(markers.sort((a,b) => a.time - b.time)); } catch(e) {}
 
-    // Zoom to signal area
+    // Zoom to signal area — extend to cover the exit if the trade is resolved
     const tfSeconds = { '1m':60, '5m':300, '15m':900, '1h':3600, '4h':14400, '1d':86400 };
     const ct = tfSeconds[tf] || 900;
     litLiveChart.timeScale().setVisibleRange({
       from: sigTime - ct * 20,
-      to: sigTime + ct * 30,
+      to: (exitTime ? Math.max(exitTime, sigTime) : sigTime) + ct * 10,
     });
   } catch (e) {
     container.innerHTML = `<div style="color:var(--danger);padding:20px">خطا: ${e.message}</div>`;

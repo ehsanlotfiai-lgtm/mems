@@ -225,6 +225,7 @@ class ScalpingEngine:
         side_hits = [h for h in all_hits if h.detail.get("side") == ("long" if side == Side.LONG else "short")]
         btb_hit = next((h for h in side_hits if h.name == "scalp_pro_btb"), None)
         sp2l_hit = next((h for h in side_hits if h.name == "scalp_sp2l"), None)
+        micromap_hit = next((h for h in side_hits if h.name == "scalp_micromap"), None)
 
         def _valid_long(sl_v, tp_v):
             return sl_v < entry < tp_v
@@ -252,6 +253,18 @@ class ScalpingEngine:
                 tp2 = d_tp2
                 risk = abs(entry - sl)
                 tp3 = entry + risk * (3.0 if side == Side.LONG else -3.0)
+        elif micromap_hit is not None and "sl" in micromap_hit.detail and "tp" in micromap_hit.detail:
+            # MicroMap's SL is the reference micro-channel candle's own
+            # low/high (structural), TP is the configured min R:R target —
+            # both far more meaningful than a generic ATR multiple.
+            d_sl, d_tp = float(micromap_hit.detail["sl"]), float(micromap_hit.detail["tp"])
+            ok = _valid_long(d_sl, d_tp) if side == Side.LONG else _valid_short(d_sl, d_tp)
+            if ok:
+                sl = d_sl
+                tp1 = tp = d_tp
+                risk = abs(entry - sl)
+                tp2 = entry + risk * (2.5 if side == Side.LONG else -2.5)
+                tp3 = entry + risk * (3.5 if side == Side.LONG else -3.5)
 
         risk_pct = float(self.s.risk.get("risk_per_trade_pct", 1.0)) / 100.0
         size_usdt = float(self.s.risk.get("initial_paper_balance", 10000)) * risk_pct
