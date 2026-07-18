@@ -190,8 +190,18 @@ class ExecutionEngine:
             leverage_suggested=leverage,
         )
 
-    def score(self, candidate: SetupCandidate, plan: ExecutionPlan, atr: float) -> ScoreBreakdown:
-        """Score the setup quality (0-1)."""
+    def score(
+        self, candidate: SetupCandidate, plan: ExecutionPlan, atr: float,
+        volume_ratio: Optional[float] = None, choppiness: Optional[float] = None,
+    ) -> ScoreBreakdown:
+        """Score the setup quality (0-1).
+
+        volume_ratio: displacement candle's volume / recent average volume
+            (None if volume data unavailable — falls back to neutral score).
+        choppiness: recent price range / ATR over a short lookback — high
+            values mean the market has been range-bound/noisy right before
+            this signal, which historically produces more false breakouts.
+        """
         s = ScoreBreakdown()
 
         # HTF alignment (0.20 weight)
@@ -261,8 +271,37 @@ class ExecutionEngine:
         # RR quality (0.05 weight)
         s.rr_quality = min(plan.rr_tp2 / 4.0, 1.0)
 
-        # Session quality (0.05 weight) — default to good
-        s.session_quality = 0.7
+        # Volume confirmation (0.05 weight) — replaces the old hardcoded
+        # "session_quality" placeholder (which was always 0.7 regardless of
+        # anything real). A displacement candle on genuinely elevated
+        # volume is far more likely to be an institutional move rather than
+        # noise; low-volume "displacement" is a common source of fakeouts.
+        if volume_ratio is not None:
+            s.session_quality = float(np.clip(volume_ratio / 2.0, 0.2, 1.0))
+            if volume_ratio >= 1.5:
+                s.explanation.append(f"Volume confirmed: {volume_ratio:.1f}x avg")
+            elif volume_ratio < 0.8:
+                s.explanation.append(f"Weak volume: {volume_ratio:.1f}x avg — caution")
+        else:
+            s.session_quality = 0.5  # neutral when volume data unavailable
+
+        # Choppy-market penalty — real implementation (previously a dead
+        # field that was declared but never assigned). Uses recent
+        # range/ATR compression right before the signal: a market that's
+        # been chopping sideways just before this setup is more likely to
+        # produce a fakeout than a market coming out of a clean trend.
+        if choppiness is not None:
+            if choppiness < 1.5:
+                s.choppy_penalty = 0.15
+                s.explanation.append(f"⚠️ Choppy pre-signal price action ({choppiness:.1f}x ATR range) — penalty applied")
+            elif choppiness < 2.5:
+                s.choppy_penalty = 0.05
+
+        # Weak reclaim penalty — a sweep that only just barely cleared the
+        # minimum penetration threshold is a weaker signal than a decisive one.
+        if candidate.sweep is not None and candidate.sweep.penetration_atr < 0.35:
+            s.weak_reclaim_penalty = 0.05
+            s.explanation.append("Weak sweep penetration — minor penalty")
 
         # Weighted total
         s.total = round(
@@ -292,6 +331,12 @@ class ExecutionEngine:
             return False
         # Must have at least displacement
         if candidate.displacement is None:
+            return False
+        # Hard reject setups formed right after very choppy/compressed price
+        # action — previously this was ONLY a soft score penalty, meaning a
+        # setup with every other box checked could still slip through with
+        # a mediocre-but-passing score despite forming in pure noise.
+        if score.choppy_penalty >= 0.15:
             return False
         return True
 
@@ -362,15 +407,30 @@ class ExecutionEngine:
         self, candidate: SetupCandidate, entry: float,
         risk: float, liq_map: LiquidityMap, side: str,
     ):
-        """Calculate TP1/TP2/TP3 with minimum profitability guarantee."""
-        # Ensure minimum TP distance (must be > 0.8% for commission coverage + profit)
+        """Calculate TP1/TP2/TP3 with minimum profitability guarantee.
+
+        TP2 previously ALWAYS took the max()/min() of the real liquidity
+        target and a fixed 2.5R fallback — which means if the actual
+        nearest liquidity pool was CLOSER than 2.5R, the code silently
+        pushed TP2 further away, past the real target, into empty space
+        with no liquidity backing it. That's a big driver of low realized
+        win rate: TP2 was frequently unreachable because it didn't
+        correspond to any real level. Now: if a real target pool exists
+        and sits at >= min_rr (so R:R filters still pass), USE the real
+        target honestly instead of always inflating outward.
+        """
         min_tp_distance = entry * 0.008  # At least 0.8% from entry
         effective_risk = max(risk, min_tp_distance / 2.0)
+        min_rr_distance = risk * self.min_rr
 
         if side == "long":
             tp1 = entry + max(effective_risk * 1.5, min_tp_distance)
-            if candidate.target_pool:
-                tp2 = max(candidate.target_pool.price, entry + effective_risk * 2.5)
+            if candidate.target_pool and candidate.target_pool.price > entry:
+                target_dist = candidate.target_pool.price - entry
+                if target_dist >= min_rr_distance:
+                    tp2 = candidate.target_pool.price  # honest real target
+                else:
+                    tp2 = entry + effective_risk * 2.5  # real target too close -> fallback
             else:
                 tp2 = entry + effective_risk * 2.5
             tp3 = entry + effective_risk * 4.0
@@ -378,8 +438,12 @@ class ExecutionEngine:
             tp3 = max(tp3, tp2 + effective_risk * 0.5)
         else:
             tp1 = entry - max(effective_risk * 1.5, min_tp_distance)
-            if candidate.target_pool:
-                tp2 = min(candidate.target_pool.price, entry - effective_risk * 2.5)
+            if candidate.target_pool and candidate.target_pool.price < entry:
+                target_dist = entry - candidate.target_pool.price
+                if target_dist >= min_rr_distance:
+                    tp2 = candidate.target_pool.price  # honest real target
+                else:
+                    tp2 = entry - effective_risk * 2.5
             else:
                 tp2 = entry - effective_risk * 2.5
             tp3 = entry - effective_risk * 4.0

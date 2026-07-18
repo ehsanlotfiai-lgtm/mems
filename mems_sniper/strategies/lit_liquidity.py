@@ -263,11 +263,21 @@ class LiquidityEngine:
         opens: np.ndarray, highs: np.ndarray, lows: np.ndarray, closes: np.ndarray,
         idx: int, atr: float, n: int, timestamps: Optional[np.ndarray],
     ) -> Optional[SweepEvent]:
-        """Check if candle at idx sweeps the pool."""
+        """Check if candle at idx sweeps the pool, AND that the reversal
+        actually held for at least 1 subsequent candle (a same-candle close
+        back over the level is easy to fake with a single wick — real
+        institutional sweeps are confirmed by price staying on the reclaimed
+        side afterward, not immediately continuing through)."""
         h = float(highs[idx])
         l = float(lows[idx])
         c = float(closes[idx])
         o = float(opens[idx])
+
+        # A subsequent candle to confirm the reclaim held, if one exists yet
+        # within the data (idx+1 may not exist for the very last candle —
+        # in that case we accept the same-candle reclaim as provisional,
+        # since we can't demand data from the future).
+        confirm_idx = idx + 1 if idx + 1 < n else None
 
         if pool.side == LiquiditySide.BUY_SIDE:
             # Buy-side sweep: wick ABOVE pool, close BELOW
@@ -277,8 +287,13 @@ class LiquidityEngine:
                 if pen_atr < self.sweep_penetration_min_atr:
                     return None
 
-                # Check reclaim (same candle closed back = reclaimed)
                 reclaimed = c < pool.price
+                # Confirmation: the NEXT candle must not re-break back above
+                # the pool level (i.e. the sweep must actually hold).
+                if confirm_idx is not None:
+                    next_high = float(highs[confirm_idx])
+                    if next_high > pool.price:
+                        return None  # reversal failed to hold -> not a real sweep
                 quality = self._grade_sweep_quality(pool, pen_atr)
                 ts = float(timestamps[idx]) if timestamps is not None else 0.0
 
@@ -299,6 +314,10 @@ class LiquidityEngine:
                     return None
 
                 reclaimed = c > pool.price
+                if confirm_idx is not None:
+                    next_low = float(lows[confirm_idx])
+                    if next_low < pool.price:
+                        return None  # reversal failed to hold -> not a real sweep
                 quality = self._grade_sweep_quality(pool, pen_atr)
                 ts = float(timestamps[idx]) if timestamps is not None else 0.0
 

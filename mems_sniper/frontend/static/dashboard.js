@@ -1634,13 +1634,29 @@ function renderScalpHistory(signals) {
 let scalpTradeChart = null;
 let scalpTradeCandleSeries = null;
 let scalpTradePriceLines = [];
+let _scalpChartCurrentSignalId = null;
+let _scalpChartCurrentTf = '5m';
 
-async function showScalpTradeOnChart(signalId) {
+function switchScalpChartTf(tf) {
+  _scalpChartCurrentTf = tf;
+  document.querySelectorAll('.scalp-tf-btn').forEach(b => b.classList.toggle('active', b.dataset.tf === tf));
+  if (_scalpChartCurrentSignalId) {
+    showScalpTradeOnChart(_scalpChartCurrentSignalId, tf);
+  }
+}
+
+async function showScalpTradeOnChart(signalId, timeframe) {
+  const tf = timeframe || _scalpChartCurrentTf || '5m';
+  _scalpChartCurrentSignalId = signalId;
+  _scalpChartCurrentTf = tf;
   const titleEl = $('#scalp_chart_title');
   const detailEl = $('#scalp_chart_detail');
   const container = document.getElementById('scalp_chart_container');
+  const tfSwitcher = document.getElementById('scalp_chart_tf_switcher');
   if (!container) return;
   if (titleEl) titleEl.textContent = '⏳ در حال بارگذاری نمودار...';
+  if (tfSwitcher) tfSwitcher.style.display = 'flex';
+  document.querySelectorAll('.scalp-tf-btn').forEach(b => b.classList.toggle('active', b.dataset.tf === tf));
 
   // Highlight the clicked row
   document.querySelectorAll('#scalp_history tr').forEach(r => { r.style.background = ''; });
@@ -1651,7 +1667,7 @@ async function showScalpTradeOnChart(signalId) {
   });
 
   try {
-    const resp = await fetch(`/api/scalping/trade/${signalId}/chart`);
+    const resp = await fetch(`/api/scalping/trade/${signalId}/chart?timeframe=${tf}`);
     if (!resp.ok) { toast('اطلاعات این معامله پیدا نشد'); return; }
     const data = await resp.json();
     const sig = data.signal || {};
@@ -2491,9 +2507,23 @@ function renderLitLiveList() {
 }
 
 // ═══ Show live signal on chart ═══
-async function showLitSignalOnChart(signalId) {
+let _litChartCurrentSignalId = null;
+let _litChartCurrentTf = '15m';
+
+function switchLitChartTf(tf) {
+  _litChartCurrentTf = tf;
+  document.querySelectorAll('.lit-tf-btn').forEach(b => b.classList.toggle('active', b.dataset.tf === tf));
+  if (_litChartCurrentSignalId) {
+    showLitSignalOnChart(_litChartCurrentSignalId, tf);
+  }
+}
+
+async function showLitSignalOnChart(signalId, timeframe) {
   const sig = litLiveSignals.find(s => s.id === signalId);
   if (!sig) return;
+  const tf = timeframe || _litChartCurrentTf || '15m';
+  _litChartCurrentSignalId = signalId;
+  _litChartCurrentTf = tf;
 
   // Highlight row
   document.querySelectorAll('#lit_live_signals tr').forEach(r => { r.style.background = ''; r.style.borderRight = ''; });
@@ -2505,10 +2535,12 @@ async function showLitSignalOnChart(signalId) {
 
   // Fetch candles
   const container = document.getElementById('lit_live_chart_container');
-  document.getElementById('lit_live_chart_title').textContent = `📈 ${sig.symbol} — ${LIT_STRATEGY_NAMES[sig.strategy]?.fa || sig.strategy || 'LIT'} (${sig.timeframe || '15m'})`;
+  document.getElementById('lit_live_chart_title').textContent = `📈 ${sig.symbol} — ${LIT_STRATEGY_NAMES[sig.strategy]?.fa || sig.strategy || 'LIT'} (${tf})`;
+  const tfSwitcher = document.getElementById('lit_live_tf_switcher');
+  if (tfSwitcher) tfSwitcher.style.display = 'flex';
+  document.querySelectorAll('.lit-tf-btn').forEach(b => b.classList.toggle('active', b.dataset.tf === tf));
 
   try {
-    const tf = '15m';
     const resp = await fetch(`/api/lit/candles/${sig.symbol.replace('/', '-')}?timeframe=${tf}&limit=200`);
     const data = await resp.json();
 

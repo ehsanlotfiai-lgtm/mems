@@ -36,6 +36,15 @@ class RiskEngine:
         self.max_open = int(self.risk.get("max_open_positions", 4))
         self.daily_loss_limit_pct = float(self.risk.get("daily_max_loss_pct", 5.0))
         self.max_position_age = int(self.risk.get("max_position_age_seconds", 3600))
+        # Minimum seconds a position must be open before SL/TP is even
+        # checked — prevents "entry_time == exit_time" instant stop-outs
+        # caused by a stale/gapped price tick landing right after open.
+        self.min_position_age_before_exit = float(self.risk.get("min_position_age_before_exit_seconds", 5))
+        # If a single price update would produce a loss more than this many
+        # multiples of the intended SL distance, treat it as an anomalous/
+        # stale price tick rather than a legitimate stop-out — skip this
+        # update and let the NEXT tick (hopefully sane) decide.
+        self.max_gap_multiple_of_sl = float(self.risk.get("max_gap_multiple_of_sl_distance", 3.0))
 
     # ------------------------------------ load open positions from DB on startup
     def load_open_positions(self, rows: list) -> None:
@@ -90,12 +99,35 @@ class RiskEngine:
             return False
         return True
 
-    def open_from_signal(self, sig: Signal) -> Optional[PaperPosition]:
+    def open_from_signal(self, sig: Signal, live_price: Optional[float] = None) -> Optional[PaperPosition]:
         if not self.can_open():
             return None
         size = float(sig.position_size_usdt)
         if size <= 0 or self.equity <= 0:
             return None
+
+        # ── Slippage guard ──
+        # sig.entry is the last CLOSED candle's close, computed potentially
+        # several seconds before this call. If the caller supplies a fresh
+        # live_price and it has already gapped too far from sig.entry (thin
+        #/illiquid symbols can move several % between candle-close and the
+        # moment we actually open the paper position), reject the trade
+        # instead of opening a position that's already effectively past its
+        # own stop-loss (this was the exact cause of the TRADOOR/USDT trade
+        # that had entry_time == exit_time with a huge instant loss).
+        max_slippage_pct = float(self.risk.get("max_entry_slippage_pct", 0.5))
+        if live_price is not None and live_price > 0 and sig.entry > 0:
+            slippage_pct = abs(live_price - sig.entry) / sig.entry * 100
+            if slippage_pct > max_slippage_pct:
+                logger.warning(
+                    f"Risk: REJECTED {sig.symbol} — entry slippage {slippage_pct:.2f}% "
+                    f"(signal={sig.entry:.6g}, live={live_price:.6g}) exceeds "
+                    f"max {max_slippage_pct}%"
+                )
+                return None
+            # Use the live price as the real fill price (more honest than the
+            # stale candle close) but only when it's within tolerance.
+            sig.entry = live_price
         risk_pct = float(self.risk.get("risk_per_trade_pct", 1.0)) / 100.0
         # position size = equity * risk_pct / distance-to-SL ratio
         dist = abs(sig.entry - sig.stop_loss)
@@ -154,6 +186,26 @@ class RiskEngine:
                 hit = self._close(pos, price, "timeout")
                 closed.append(hit)
                 continue
+            # Grace period — skip SL/TP checks entirely for the first few
+            # seconds after open, so a stale/laggy price feed can't produce
+            # an "instant" stop-out before a real live quote has arrived.
+            if (now - pos.opened_at) < self.min_position_age_before_exit:
+                continue
+            # Anomaly guard — reject a single tick that implies a loss far
+            # beyond the position's own SL distance (e.g. a bad/gapped
+            # ticker read on a thin altcoin). Skip this update; a sane
+            # subsequent tick will close it normally if the move is real.
+            sl_distance = abs(pos.entry - pos.stop_loss)
+            if sl_distance > 0:
+                implied_move = abs(price - pos.entry)
+                if implied_move > sl_distance * self.max_gap_multiple_of_sl:
+                    logger.warning(
+                        f"Risk: ANOMALOUS price for {pos.symbol} — price={price:.6g} "
+                        f"entry={pos.entry:.6g} SL={pos.stop_loss:.6g} implies "
+                        f"{implied_move/sl_distance:.1f}x SL distance in one tick — "
+                        f"skipping this update"
+                    )
+                    continue
             self._maybe_update_trailing(pos, price)
             hit = self._check_exit(pos, price)
             if hit is not None:

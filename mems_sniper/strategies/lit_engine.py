@@ -204,8 +204,30 @@ class LITEngine:
             logger.debug(f"LIT {symbol}: execution invalid — {plan.rejection_reason}")
             return None
 
+        # ── Volume confirmation for the displacement candle ──
+        volume_ratio = None
+        if "volume" in df.columns and candidate.displacement is not None:
+            try:
+                volumes = df["volume"].values.astype(float)
+                d_idx = candidate.displacement.index
+                if 0 <= d_idx < len(volumes):
+                    lookback_start = max(0, d_idx - 20)
+                    avg_vol = float(np.mean(volumes[lookback_start:d_idx])) if d_idx > lookback_start else 0.0
+                    volume_ratio = float(volumes[d_idx]) / avg_vol if avg_vol > 0 else None
+            except Exception:  # noqa: BLE001
+                volume_ratio = None
+
+        # ── Choppiness: recent range compression right before the signal ──
+        choppiness = None
+        try:
+            recent_window = min(15, n - 1)
+            recent_range = float(np.max(highs[-recent_window:]) - np.min(lows[-recent_window:]))
+            choppiness = recent_range / max(atr, 1e-10)
+        except Exception:  # noqa: BLE001
+            choppiness = None
+
         # Score
-        score = self.execution_engine.score(candidate, plan, atr)
+        score = self.execution_engine.score(candidate, plan, atr, volume_ratio=volume_ratio, choppiness=choppiness)
 
         # No-trade filters
         if not self.execution_engine.passes_filters(candidate, plan, score):

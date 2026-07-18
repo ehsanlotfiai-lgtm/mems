@@ -725,11 +725,15 @@ def create_app(
         }
 
     @app.get("/api/scalping/trade/{signal_id}/chart")
-    async def api_scalp_trade_chart(signal_id: str) -> dict:
+    async def api_scalp_trade_chart(signal_id: str, timeframe: str = Query("5m")) -> dict:
         """Returns the scalp signal + its linked paper trade(s) (entry/exit time,
         close reason, exit price) + OHLCV candles around the trade window, so the
         frontend can draw entry/SL/TP/exit markers on a real chart for a closed
-        (or still-open) trade shown in the history table."""
+        (or still-open) trade shown in the history table.
+
+        timeframe: 1m | 5m | 15m — lets the user zoom in/out on the same
+        trade (e.g. see the exact 1m price action around entry, or the
+        broader 15m context)."""
         s: Storage = _app_state["storage"]
         await _ensure_storage(s)
         sig = await s.get_signal_by_id(signal_id)
@@ -742,7 +746,7 @@ def create_app(
         exchange = sig["exchange"]
         symbol = sig["symbol"]
         is_dex = symbol.startswith("DEX:")
-        tf = "5m"
+        tf = timeframe if timeframe in ("1m", "5m", "15m") else "5m"
         candles = []
         if not is_dex:
             sym = symbol.replace("_", "/")

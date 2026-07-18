@@ -176,8 +176,13 @@
 
         <!-- Trade Chart (opens when a history row is clicked) -->
         <div class="settings-card" style="padding:6px;margin-top:14px">
-          <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px">
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px;flex-wrap:wrap;gap:8px">
             <span style="font-weight:bold;font-size:14px" id="scalp_chart_title">📈 برای مشاهده نمودار روی یک ردیف از تاریخچه کلیک کنید</span>
+            <div id="scalp_chart_tf_switcher" style="display:none;gap:4px">
+              <button class="btn btn-secondary scalp-tf-btn" data-tf="1m" onclick="switchScalpChartTf('1m')" style="font-size:11px;padding:3px 10px">۱ دقیقه</button>
+              <button class="btn btn-secondary scalp-tf-btn active" data-tf="5m" onclick="switchScalpChartTf('5m')" style="font-size:11px;padding:3px 10px">۵ دقیقه</button>
+              <button class="btn btn-secondary scalp-tf-btn" data-tf="15m" onclick="switchScalpChartTf('15m')" style="font-size:11px;padding:3px 10px">۱۵ دقیقه</button>
+            </div>
           </div>
           <div id="scalp_chart_container" style="height:420px;width:100%"></div>
           <div id="scalp_chart_detail" style="padding:6px 10px;font-size:12px;color:var(--text-muted)"></div>
@@ -235,8 +240,13 @@
             <!-- نمودار (تمام عرض، بالا) -->
             <div>
               <div class="settings-card" style="padding:6px">
-                <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px">
+                <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px;flex-wrap:wrap;gap:8px">
                   <span style="font-weight:bold;font-size:14px" id="lit_live_chart_title">📈 روی یک سیگنال کلیک کنید</span>
+                  <div id="lit_live_tf_switcher" style="display:none;gap:4px">
+                    <button class="btn btn-secondary lit-tf-btn" data-tf="1m" onclick="switchLitChartTf('1m')" style="font-size:11px;padding:3px 10px">۱ دقیقه</button>
+                    <button class="btn btn-secondary lit-tf-btn" data-tf="5m" onclick="switchLitChartTf('5m')" style="font-size:11px;padding:3px 10px">۵ دقیقه</button>
+                    <button class="btn btn-secondary lit-tf-btn active" data-tf="15m" onclick="switchLitChartTf('15m')" style="font-size:11px;padding:3px 10px">۱۵ دقیقه</button>
+                  </div>
                 </div>
                 <div id="lit_live_chart_container" style="height:450px;width:100%"></div>
               </div>

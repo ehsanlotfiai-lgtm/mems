@@ -235,6 +235,11 @@ risk:
   max_open_positions: 4
   daily_max_loss_pct: 5.0
   max_position_age_seconds: 3600    # 1h max — close stale positions
+  # ── Anti-instant-stopout guards (fixes cases like TRADOOR/USDT where
+  #    entry_time == exit_time with a huge unrealistic loss) ──
+  max_entry_slippage_pct: 0.5              # reject trade if live price already moved >0.5% from signal price
+  min_position_age_before_exit_seconds: 5  # never SL/TP-check a position in its first 5 seconds
+  max_gap_multiple_of_sl_distance: 3.0      # ignore a single tick implying loss > 3x the intended SL distance
 
 # ------------------------------------------------------------
 # Backtest

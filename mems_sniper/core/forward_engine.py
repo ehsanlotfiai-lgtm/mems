@@ -315,7 +315,9 @@ class ForwardEngine:
         await self.storage.save_signal(sig)
         self._signal_cooldowns[symbol] = time.time()
         logger.info(f"SIGNAL {sig.exchange} {sig.symbol} {sig.side.value} score={sig.score:.2f} -> {sig.rationale}")
-        pos = self.risk.open_from_signal(sig)
+        # candle.close is the just-closed live candle for this exact WS tick,
+        # so it's a good live-price cross-check for the slippage guard.
+        pos = self.risk.open_from_signal(sig, live_price=float(candle.close))
         if pos is not None:
             await self.storage.open_paper(pos, signal_id=sig.id)
             self._emit_dashboard({"type": "signal_opened", "signal": sig.to_dict(), "position": pos.to_dict()})
@@ -625,7 +627,15 @@ class ForwardEngine:
                     signals_found += 1
                     logger.info(f"SIGNAL (poll) {sig.exchange} {sig.symbol} {sig.side.value} score={sig.score:.2f}")
 
-                    pos = self.risk.open_from_signal(sig)
+                    live_price = None
+                    try:
+                        ticker = await em.fetch_ticker(sig.exchange, sig.symbol)
+                        if ticker and ticker.get("last"):
+                            live_price = float(ticker["last"])
+                    except Exception:
+                        pass
+
+                    pos = self.risk.open_from_signal(sig, live_price=live_price)
                     if pos is not None:
                         await self.storage.open_paper(pos, signal_id=sig.id)
                         self._emit_dashboard({"type": "signal_opened", "signal": sig.to_dict(), "position": pos.to_dict()})
@@ -746,7 +756,20 @@ class ForwardEngine:
                         f"score={sig.score:.2f} -> {sig.rationale}"
                     )
 
-                    pos = self.risk.open_from_signal(sig)
+                    # Fetch a fresh live price right before opening — sig.entry
+                    # is the last CLOSED candle's close, which can already be
+                    # stale/several seconds old by the time we get here. The
+                    # slippage guard in open_from_signal will reject the trade
+                    # if this live price has already gapped too far.
+                    live_price = None
+                    try:
+                        ticker = await em.fetch_ticker(sig.exchange, sig.symbol)
+                        if ticker and ticker.get("last"):
+                            live_price = float(ticker["last"])
+                    except Exception:
+                        pass
+
+                    pos = self.risk.open_from_signal(sig, live_price=live_price)
                     if pos is not None:
                         await self.storage.open_paper(pos, signal_id=sig.id)
                         self._emit_dashboard({"type": "signal_opened", "signal": sig.to_dict(), "position": pos.to_dict()})
@@ -1010,7 +1033,19 @@ class ForwardEngine:
             lit_data = signal.to_dict() if hasattr(signal, 'to_dict') else {"id": signal.id}
             self._emit_dashboard({"type": "lit_signal", "signal": lit_data})
 
-            pos = risk.open_from_signal(signal_record)
+            # LIT's ideal_entry is computed from historical candle analysis
+            # (can be several seconds/minutes old by the time we get here) —
+            # fetch a fresh live price so the slippage guard can catch it if
+            # the market has already moved past the signal's entry/SL.
+            live_price = None
+            try:
+                ticker = await self.em.fetch_ticker("binance", signal.symbol)
+                if ticker and ticker.get("last"):
+                    live_price = float(ticker["last"])
+            except Exception:
+                pass
+
+            pos = risk.open_from_signal(signal_record, live_price=live_price)
             if pos:
                 self._emit_dashboard({"type": "open", "position": pos.to_dict()})
 
