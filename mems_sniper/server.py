@@ -469,7 +469,38 @@ def create_app(
                 yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False)
 
             from config.settings import reload_settings
-            reload_settings()
+            new_settings = reload_settings()
+            _app_state["settings"] = new_settings
+
+            # ── CRITICAL: reload_settings() only creates a brand-new Settings
+            # object -- it does NOT touch the RiskEngine that's already
+            # running (ForwardEngine/main+scalp+LIT loops all hold a
+            # reference to the SAME _app_state["risk"] instance, which took
+            # a one-time snapshot of these values at process startup and
+            # never re-read them since). Without this, changing
+            # max_open_positions (or any other risk.* value) in the
+            # settings panel had literally zero effect until a full service
+            # restart -- update the live instance's attributes directly so
+            # the change applies immediately. ──
+            live_risk: RiskEngine = _app_state.get("risk")
+            if live_risk is not None:
+                live_risk.s = new_settings
+                live_risk.risk = new_settings.risk
+                live_risk.max_open = int(cfg["risk"]["max_open_positions"])
+                live_risk.daily_loss_limit_pct = float(cfg["risk"]["daily_max_loss_pct"])
+                logger.info(
+                    f"Settings saved — live RiskEngine updated: "
+                    f"max_open_positions={live_risk.max_open}, "
+                    f"daily_max_loss_pct={live_risk.daily_loss_limit_pct}"
+                )
+            # The ForwardEngine (main/scalp/LIT loops) also holds its OWN
+            # fixed reference to the old Settings object (self.s), read
+            # fresh every loop iteration for things like lit.max_open_positions
+            # -- point it at the new Settings too so LIT's per-cycle
+            # candidate-slicing cap also picks up config.yaml edits live.
+            live_forward = _app_state.get("forward")
+            if live_forward is not None:
+                live_forward.s = new_settings
 
             return {"ok": True, "message": "تنظیمات ذخیره شد"}
         except Exception as exc:

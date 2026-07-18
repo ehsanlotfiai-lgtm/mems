@@ -362,7 +362,10 @@ class Storage:
             }
 
         cur = await self.db.execute(
-            "SELECT pnl_pct, pnl_usdt FROM paper_trades WHERE pnl_pct IS NOT NULL"
+            """SELECT pnl_pct, pnl_usdt FROM paper_trades
+               WHERE pnl_pct IS NOT NULL
+               AND signal_id NOT LIKE 'SCP_%'
+               AND signal_id NOT LIKE 'LIT_%'"""
         )
         closed_rows = await cur.fetchall()
         total = len(closed_rows)
