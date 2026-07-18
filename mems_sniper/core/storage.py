@@ -198,6 +198,45 @@ class Storage:
         )
         await self.db.commit()
 
+    async def has_unresolved_signal_for_symbol(
+        self, symbol: str, like_prefix: Optional[str] = None,
+        max_age_seconds: float = 21600,
+    ) -> bool:
+        """True if `symbol` already has a signal sitting at status='open'
+        within the recent window.
+
+        This is the DB-level half of the duplicate-signal fix: a signal's
+        status stays 'open' forever whenever RiskEngine.open_from_signal()
+        rejects opening an actual paper position for it (e.g. max_open_positions
+        already full, or the entry-slippage guard rejects it) — save_signal()
+        is always called BEFORE that open attempt, so the row exists
+        regardless of whether a position was ever tracked. Combined with a
+        cooldown that only blocks re-evaluation for a short window, the same
+        market setup kept re-triggering a fresh near-identical signal every
+        cooldown cycle once the old one's cooldown expired, producing exact
+        duplicate entry/SL/TP rows repeating indefinitely (the reported bug).
+
+        like_prefix: e.g. 'SCP_%' for scalp signals, 'LIT_%' for LIT signals,
+        or None to check the main confluence-engine signals (which have no
+        prefix at all — matched by NOT LIKE both other prefixes, matching the
+        existing convention in recent_signals()).
+        """
+        cutoff = time.time() - max_age_seconds
+        if like_prefix:
+            cur = await self.db.execute(
+                "SELECT 1 FROM signals WHERE symbol=? AND status='open' "
+                "AND id LIKE ? AND created_at > ? LIMIT 1",
+                (symbol, like_prefix, cutoff),
+            )
+        else:
+            cur = await self.db.execute(
+                "SELECT 1 FROM signals WHERE symbol=? AND status='open' "
+                "AND id NOT LIKE 'SCP_%' AND id NOT LIKE 'LIT_%' AND created_at > ? LIMIT 1",
+                (symbol, cutoff),
+            )
+        row = await cur.fetchone()
+        return row is not None
+
     # ------------------------------------------ paper trades
     async def open_paper(self, pos: PaperPosition, signal_id: Optional[str] = None) -> None:
         if signal_id:

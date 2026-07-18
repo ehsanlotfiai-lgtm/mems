@@ -272,16 +272,30 @@ def create_app(
         take_profit = sig["take_profit"]
         atr = sig.get("atr", 0) or 0
 
+        # Look up the REAL linked paper trade (if any) so the chart can show
+        # the actual entry_time/exit_time/exit_price/close_reason instead of
+        # only price levels — gives the Signals tab the same "see exactly how
+        # a closed trade played out" capability already built for Scalp.
+        trades = await s.get_paper_trades_by_signal(signal_id)
+        trade = trades[0] if trades else None
+
         return {
             "signal": sig,
             "candles_by_tf": candles_by_tf,
+            "trade": trade,
             "markers": {
                 "entry": entry,
                 "stop_loss": stop_loss,
                 "take_profit": take_profit,
+                "tp2": sig.get("tp2"),
                 "atr": atr,
                 "side": side,
                 "created_at": sig["created_at"],
+                "entry_time": (trade or {}).get("opened_at") or sig["created_at"],
+                "exit_time": (trade or {}).get("closed_at"),
+                "exit_price": (trade or {}).get("exit_price"),
+                "close_reason": (trade or {}).get("close_reason"),
+                "pnl_pct": (trade or {}).get("pnl_pct"),
             },
             "strategy_explanations": strategy_explanations,
         }

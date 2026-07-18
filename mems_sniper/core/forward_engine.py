@@ -312,6 +312,21 @@ class ForwardEngine:
             await self.storage.update_paper_close(pos)
         if sig is None:
             return
+        # Duplicate-signal guard: skip if this symbol already has an open
+        # position OR an unresolved signal row (status still 'open') — this
+        # is the exact bug pattern reported (same entry/SL/TP repeating
+        # every few minutes): save_signal() runs BEFORE we know if a paper
+        # position will actually be opened, so a symbol whose previous
+        # signal's position was rejected (max_open_positions full, slippage
+        # guard, etc.) kept generating a fresh near-identical signal every
+        # time its short cooldown expired, forever, since nothing ever
+        # marked the old row as resolved.
+        if self.risk.has_open_position_for_symbol(symbol):
+            logger.debug(f"Signal SKIPPED {symbol}: already has an open position")
+            return
+        if await self.storage.has_unresolved_signal_for_symbol(symbol):
+            logger.debug(f"Signal SKIPPED {symbol}: unresolved signal already pending")
+            return
         await self.storage.save_signal(sig)
         self._signal_cooldowns[symbol] = time.time()
         logger.info(f"SIGNAL {sig.exchange} {sig.symbol} {sig.side.value} score={sig.score:.2f} -> {sig.rationale}")
@@ -321,6 +336,13 @@ class ForwardEngine:
         if pos is not None:
             await self.storage.open_paper(pos, signal_id=sig.id)
             self._emit_dashboard({"type": "signal_opened", "signal": sig.to_dict(), "position": pos.to_dict()})
+        else:
+            # No paper position was actually opened (max_open_positions full,
+            # slippage guard rejected it, etc.) — mark the signal as
+            # "no_position" immediately instead of leaving it at 'open'
+            # forever. Otherwise the duplicate-signal guard above would
+            # block this symbol from ever generating a new signal again.
+            await self.storage.update_signal_status(sig.id, "no_position")
         if self.notify is not None:
             try:
                 await self.notify.send_signal(sig)
@@ -622,6 +644,13 @@ class ForwardEngine:
                     if sig is None:
                         continue
 
+                    # Duplicate-signal guard — see _maybe_evaluate for full
+                    # explanation of the bug this fixes.
+                    if self.risk.has_open_position_for_symbol(info.symbol):
+                        continue
+                    if await self.storage.has_unresolved_signal_for_symbol(info.symbol):
+                        continue
+
                     await self.storage.save_signal(sig)
                     self._signal_cooldowns[info.symbol] = time.time()
                     signals_found += 1
@@ -639,6 +668,8 @@ class ForwardEngine:
                     if pos is not None:
                         await self.storage.open_paper(pos, signal_id=sig.id)
                         self._emit_dashboard({"type": "signal_opened", "signal": sig.to_dict(), "position": pos.to_dict()})
+                    else:
+                        await self.storage.update_signal_status(sig.id, "no_position")
 
                     if self.notify is not None:
                         try:
@@ -748,6 +779,13 @@ class ForwardEngine:
                     if sig is None:
                         continue
 
+                    # Duplicate-signal guard — see _maybe_evaluate for full
+                    # explanation of the bug this fixes.
+                    if self.risk.has_open_position_for_symbol(info.symbol):
+                        continue
+                    if await self.storage.has_unresolved_signal_for_symbol(info.symbol, like_prefix="SCP_%"):
+                        continue
+
                     await self.storage.save_signal(sig)
                     self._scalp_cooldowns[info.symbol] = time.time()
                     scalp_signals += 1
@@ -773,6 +811,8 @@ class ForwardEngine:
                     if pos is not None:
                         await self.storage.open_paper(pos, signal_id=sig.id)
                         self._emit_dashboard({"type": "signal_opened", "signal": sig.to_dict(), "position": pos.to_dict()})
+                    else:
+                        await self.storage.update_signal_status(sig.id, "no_position")
 
                     if self.notify is not None:
                         try:
@@ -991,6 +1031,15 @@ class ForwardEngine:
             last_signal = await storage.get_last_signal(signal.symbol, minutes=15)
             if last_signal:
                 return
+            # Duplicate-signal guard — see _maybe_evaluate for full
+            # explanation. LIT's 15-min get_last_signal check above only
+            # covers a short window; also check for any still-unresolved
+            # LIT signal on this symbol regardless of age, and skip if a
+            # position is already open for it.
+            if risk.has_open_position_for_symbol(signal.symbol):
+                return
+            if await storage.has_unresolved_signal_for_symbol(signal.symbol, like_prefix="LIT_%"):
+                return
 
             entry = signal.entry
             sl = signal.stop_loss
@@ -1048,6 +1097,8 @@ class ForwardEngine:
             pos = risk.open_from_signal(signal_record, live_price=live_price)
             if pos:
                 self._emit_dashboard({"type": "open", "position": pos.to_dict()})
+            else:
+                await storage.update_signal_status(signal_record.id, "no_position")
 
             logger.info(
                 f"LIT {signal.side.upper()} {signal.symbol} @ {entry:.6g} "

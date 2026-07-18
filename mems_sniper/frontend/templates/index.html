@@ -129,6 +129,7 @@
             <tbody id="signals_history"></tbody>
           </table>
         </div>
+        <div id="signals_history_pager"></div>
       </section>
 
       <!-- SCALPING TAB — اسکلپ روی ارزهای پرحجم -->
@@ -201,6 +202,7 @@
             <tbody id="scalp_history"></tbody>
           </table>
         </div>
+        <div id="scalp_history_pager"></div>
       </section>
 
       <!-- ═══════════════════════════════════════════════════════════════════ -->
@@ -259,7 +261,7 @@
               <div class="settings-card" style="padding:8px">
                 <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px">
                   <h3 style="margin:0">📡 سیگنال‌های لایو — ۱۰ روز اخیر</h3>
-                  <select id="lit_live_filter" class="input" style="width:auto;height:32px;font-size:12px" onchange="renderLitLiveList()">
+                  <select id="lit_live_filter" class="input" style="width:auto;height:32px;font-size:12px" onchange="_paginationState['lit_live_signals']=0;renderLitLiveList()">
                     <option value="all">همه</option>
                     <option value="long">فقط لانگ</option>
                     <option value="short">فقط شورت</option>
@@ -278,6 +280,7 @@
                     </tbody>
                   </table>
                 </div>
+                <div id="lit_live_signals_pager"></div>
               </div>
             </div>
 

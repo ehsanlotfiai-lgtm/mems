@@ -307,3 +307,15 @@ class RiskEngine:
 
     def open_positions_list(self) -> List[PaperPosition]:
         return list(self.open_positions.values())
+
+    def has_open_position_for_symbol(self, symbol: str) -> bool:
+        """True if a symbol already has an active paper position.
+
+        Used to stop the signal-generation loops from creating a brand new
+        signal for a symbol whose previous trade hasn't resolved yet — this
+        was the main driver of the 'duplicate signals' bug where the exact
+        same entry/SL/TP kept reappearing every cooldown cycle because the
+        prior signal's position was still open (or its cooldown had simply
+        expired while the underlying setup hadn't changed).
+        """
+        return any(p.symbol == symbol for p in self.open_positions.values())

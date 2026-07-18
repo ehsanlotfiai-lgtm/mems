@@ -3,6 +3,35 @@
    ============================================================ */
 
 const $ = (q) => document.querySelector(q);
+
+/* ═══ Shared pagination helper for history tables (Signals/Scalp/LIT) ═══ */
+const _paginationState = {}; // key -> current page (0-indexed)
+
+function paginate(items, key, pageSize = 15) {
+  const page = _paginationState[key] || 0;
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+  const clampedPage = Math.min(page, totalPages - 1);
+  _paginationState[key] = clampedPage;
+  const start = clampedPage * pageSize;
+  return {
+    pageItems: items.slice(start, start + pageSize),
+    page: clampedPage,
+    totalPages,
+    totalItems: items.length,
+  };
+}
+
+function renderPaginationControls(key, totalPages, currentPage, onChangeFnName) {
+  if (totalPages <= 1) return '';
+  const prevDisabled = currentPage <= 0 ? 'disabled style="opacity:0.4;cursor:not-allowed"' : '';
+  const nextDisabled = currentPage >= totalPages - 1 ? 'disabled style="opacity:0.4;cursor:not-allowed"' : '';
+  return `
+    <div class="pagination-bar" style="display:flex;align-items:center;justify-content:center;gap:10px;padding:10px 0;font-size:12px">
+      <button class="btn btn-secondary" ${prevDisabled} onclick="event.stopPropagation();${onChangeFnName}(${currentPage - 1})" style="padding:4px 12px">◀ قبلی</button>
+      <span style="color:var(--text-muted)">صفحه ${currentPage + 1} از ${totalPages}</span>
+      <button class="btn btn-secondary" ${nextDisabled} onclick="event.stopPropagation();${onChangeFnName}(${currentPage + 1})" style="padding:4px 12px">بعدی ▶</button>
+    </div>`;
+}
 const $$ = (q) => document.querySelectorAll(q);
 const fmtTime = (s) => new Date((s || 0) * 1000).toLocaleString('fa-IR', {
   year: '2-digit', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
@@ -180,7 +209,7 @@ function renderSignalCard(s) {
     bb_breakout: '🎯 بولینگر', funding_oi_spike: '💸 funding/OI', social_momentum: '📱 سوشال',
     ema_cross: '📈 EMA', adx_trend: '📊 ADX', squeeze_momentum: '💎 Squeeze', vwap: '📐 VWAP'
   };
-  const statusFa = { open: '🟢 فعال', tp: '✅ سود', sl: '❌ ضرر', trailing: '🔄 تریلینگ', closed: '⏰ بسته' };
+  const statusFa = { open: '🟢 فعال', tp: '✅ سود', sl: '❌ ضرر', trailing: '🔄 تریلینگ', closed: '⏰ بسته', no_position: '⏭️ رد شد (ظرفیت پر)' };
   const statusClass = { open: 'status-active', tp: 'status-tp', sl: 'status-sl', trailing: 'status-trailing', closed: 'status-closed' };
   const isNew = methods.includes('new_listing');
   const displayName = s.base || (s.symbol.startsWith('DEX:') ? s.symbol.split(':').pop().slice(0, 8) : s.symbol);
@@ -248,6 +277,7 @@ let signalFilter = 'all';
 function setSignalFilter(f) {
   signalFilter = f;
   document.querySelectorAll('.sig-filter-btn').forEach(b => b.classList.toggle('active', b.dataset.filter === f));
+  _paginationState['signals_history'] = 0;
   loadSignals();
 }
 
@@ -259,29 +289,45 @@ async function loadSignals() {
     const filtered = signalFilter === 'all' ? stateCache.signals : stateCache.signals.filter(s => (s.status || 'open') === signalFilter);
     liveSignalBox.innerHTML = filtered.map(renderSignalCard).join('') || '<p style="color:#8e95ac">سیگنالی در این دسته نیست.</p>';
     $('#signal_count').textContent = signals.length;
-    // history table with status column
-    const statusFa = { open: '🟢 فعال', tp: '✅ سود', sl: '❌ ضرر', trailing: '🔄 تریلینگ', closed: '⏰ بسته' };
-    const tb = $('#signals_history');
-    tb.innerHTML = signals.slice(0, 50).map(s => {
-      const curPrice = livePrices[s.symbol] ? fmtPrice(livePrices[s.symbol]) : '...';
-      const curColor = livePrices[s.symbol] ? (livePrices[s.symbol] > s.entry ? (s.side === 'long' ? 'var(--success)' : 'var(--danger)') : (s.side === 'long' ? 'var(--danger)' : 'var(--success)')) : '';
-      return `
-      <tr>
-        <td>${fmtTime(s.created_at)}</td><td>${s.exchange}</td>
-        <td>${s.base || s.symbol}${s.symbol.startsWith('DEX:') ? ' <small style="color:#f97316">DEX</small>' : ''}</td>
-        <td class="${s.side}">${s.side.toUpperCase()}</td>
-        <td>${s.score.toFixed(2)}</td>
-        <td>${fmtPrice(s.entry)}</td><td>${fmtPrice(s.take_profit)}</td><td>${fmtPrice(s.stop_loss)}</td>
-        <td style="color:${curColor};font-weight:bold">${curPrice}</td>
-        <td><span class="sig-badge-inline status-${s.status || 'open'}">${statusFa[s.status || 'open'] || s.status}</span></td>
-        <td>${[...new Set(s.hits.map(h => h.name))].join(', ')}</td>
-      </tr>`;
-    }).join('');
+    // history table (paginated — see renderSignalsHistoryPage)
+    window._allSignalsHistory = signals;
+    renderSignalsHistoryPage();
     // Load signal win rates
     loadSignalWinRates();
     // Fetch live prices for displayed signals
     fetchPricesForSignals(signals);
   } catch (e) { console.error(e); }
+}
+
+const statusFaMain = { open: '🟢 فعال', tp: '✅ سود', sl: '❌ ضرر', trailing: '🔄 تریلینگ', closed: '⏰ بسته', no_position: '⏭️ رد شد (ظرفیت پر)' };
+
+function changeSignalsHistoryPage(newPage) {
+  _paginationState['signals_history'] = newPage;
+  renderSignalsHistoryPage();
+}
+
+function renderSignalsHistoryPage() {
+  const tb = $('#signals_history');
+  const pagerEl = $('#signals_history_pager');
+  const signals = window._allSignalsHistory || [];
+  if (!tb) return;
+  const { pageItems, page, totalPages } = paginate(signals, 'signals_history', 15);
+  tb.innerHTML = pageItems.map(s => {
+    const curPrice = livePrices[s.symbol] ? fmtPrice(livePrices[s.symbol]) : '...';
+    const curColor = livePrices[s.symbol] ? (livePrices[s.symbol] > s.entry ? (s.side === 'long' ? 'var(--success)' : 'var(--danger)') : (s.side === 'long' ? 'var(--danger)' : 'var(--success)')) : '';
+    return `
+    <tr class="clickable-row" style="cursor:pointer" onclick="showSignalOnChart('${s.id}')" title="کلیک کنید تا نمودار ورود/خروج این سیگنال نمایش داده شود">
+      <td>${fmtTime(s.created_at)}</td><td>${s.exchange}</td>
+      <td>${s.base || s.symbol}${s.symbol.startsWith('DEX:') ? ' <small style="color:#f97316">DEX</small>' : ''}</td>
+      <td class="${s.side}">${s.side.toUpperCase()}</td>
+      <td>${s.score.toFixed(2)}</td>
+      <td>${fmtPrice(s.entry)}</td><td>${fmtPrice(s.take_profit)}</td><td>${fmtPrice(s.stop_loss)}</td>
+      <td style="color:${curColor};font-weight:bold">${curPrice}</td>
+      <td><span class="sig-badge-inline status-${s.status || 'open'}">${statusFaMain[s.status || 'open'] || s.status}</span></td>
+      <td>${[...new Set(s.hits.map(h => h.name))].join(', ')}</td>
+    </tr>`;
+  }).join('');
+  if (pagerEl) pagerEl.innerHTML = renderPaginationControls('signals_history', totalPages, page, 'changeSignalsHistoryPage');
 }
 
 /* Fetch live prices for signal symbols */
@@ -1230,12 +1276,24 @@ async function showSignalOnChart(signalId) {
       signalLines.push(line);
       signalMarkers.push({ price: tpPrice, color: '#34d399', dashed: true, label: '✅ TP' });
     }
+    // Add exit-price line — where the trade ACTUALLY closed, if resolved
+    if (markers.exit_price && markers.exit_price > 0) {
+      const isWin = (markers.pnl_pct || 0) >= 0;
+      const exitColor = isWin ? '#22c55e' : '#ef4444';
+      const line = candleSeries.createPriceLine({
+        price: markers.exit_price, color: exitColor, lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Dotted,
+        axisLabelVisible: true, title: '🏁 خروج',
+      });
+      signalLines.push(line);
+      signalMarkers.push({ price: markers.exit_price, color: exitColor, dashed: true, label: '🏁 خروج' });
+    }
 
     // ─── Entry / exit MARKERS on the timeline (arrow at entry candle, circle
     // at exit candle) — price lines above only show WHERE the level is, not
     // WHEN entry/exit happened. Mirrors showScalpTradeOnChart's pattern. ───
     const side = sig.side;
-    const entryTime = Math.floor(markers.created_at || sig.created_at || 0);
+    const entryTime = Math.floor(markers.entry_time || markers.created_at || sig.created_at || 0);
     const chartMarkers = [];
     if (entryTime > 0) {
       chartMarkers.push({
@@ -1247,10 +1305,20 @@ async function showSignalOnChart(signalId) {
     }
     const statusFa3 = { tp: 'TP', tp1: 'TP1', tp2: 'TP2', tp3: 'TP3', sl: 'SL', sl_risk_free: 'SL (ریسک‌فری)', timeout: 'تایم‌اوت' };
     const sigStatus = sig.status || 'open';
-    if (['tp', 'tp1', 'tp2', 'tp3', 'sl', 'sl_risk_free', 'timeout'].includes(sigStatus) && candles.length) {
-      // No separate exit_time field on generic signals — approximate using
-      // the last available candle time so an exit marker is still visible
-      // rather than omitted entirely.
+    // Prefer the REAL exit time/price from the linked paper trade (now
+    // returned by the backend) — only fall back to approximating with the
+    // last candle's time if no real trade record exists for some reason.
+    if (markers.exit_time) {
+      const exitTime = Math.floor(markers.exit_time);
+      if (exitTime > entryTime) {
+        const isWin = (markers.pnl_pct || 0) >= 0;
+        chartMarkers.push({
+          time: exitTime, position: side === 'long' ? 'aboveBar' : 'belowBar',
+          color: isWin ? '#22c55e' : '#ef4444', shape: 'circle',
+          text: `🏁 خروج (${statusFa3[markers.close_reason] || markers.close_reason || ''}${markers.pnl_pct != null ? ' ' + (markers.pnl_pct >= 0 ? '+' : '') + markers.pnl_pct.toFixed(2) + '%' : ''})`,
+        });
+      }
+    } else if (['tp', 'tp1', 'tp2', 'tp3', 'sl', 'sl_risk_free', 'timeout'].includes(sigStatus) && candles.length) {
       const lastCandleTime = Math.floor(candles[candles.length - 1].timestamp / 1000);
       if (lastCandleTime > entryTime) {
         const isWin = sigStatus.startsWith('tp');
@@ -1283,7 +1351,7 @@ function renderSignalAnalysis(sig, explanations, markers) {
   const sideFa = sig.side === 'long' ? '🟢 خرید (LONG)' : '🔴 فروش (SHORT)';
   const isWinner = sig.status === 'tp';
   const isLoser = sig.status === 'sl';
-  const statusFa = { open: '🟢 فعال', tp: '✅ سود', sl: '❌ ضرر', trailing: '🔄 تریلینگ', closed: '⏰ بسته' };
+  const statusFa = { open: '🟢 فعال', tp: '✅ سود', sl: '❌ ضرر', trailing: '🔄 تریلینگ', closed: '⏰ بسته', no_position: '⏭️ رد شد (ظرفیت پر)' };
   const statusColor = isWinner ? 'var(--success)' : isLoser ? 'var(--danger)' : 'var(--accent)';
 
   // TF breakdown bars
@@ -1482,6 +1550,7 @@ const scalpStrategyFa = {
 function setScalpFilter(f) {
   scalpFilter = f;
   document.querySelectorAll('.scalp-filter-btn').forEach(b => b.classList.toggle('active', b.dataset.filter === f));
+  _paginationState['scalp_history'] = 0; // reset to first page on filter change
   renderScalpSignals();
   // Re-render history with same filter
   if (window._allScalpSignals) {
@@ -1492,7 +1561,7 @@ function setScalpFilter(f) {
 function renderScalpSignalCard(s) {
   const sideFa = s.side === 'long' ? '🟢 خرید (LONG)' : '🔴 فروش (SHORT)';
   const methods = [...new Set(s.hits.map(h => h.name))];
-  const statusFa = { open: '🟢 فعال', tp: '✅ سود', sl: '❌ ضرر', trailing: '🔄 تریلینگ', closed: '⏰ بسته' };
+  const statusFa = { open: '🟢 فعال', tp: '✅ سود', sl: '❌ ضرر', trailing: '🔄 تریلینگ', closed: '⏰ بسته', no_position: '⏭️ رد شد (ظرفیت پر)' };
   const statusClass = { open: 'status-active', tp: 'status-tp', sl: 'status-sl', trailing: 'status-trailing', closed: 'status-closed' };
   const displayName = s.base || s.symbol;
   const sigStatus = s.status || 'open';
@@ -1593,10 +1662,17 @@ function renderScalpSignals() {
   $('#scalp_count').textContent = scalpCache.length;
 }
 
+function changeScalpHistoryPage(newPage) {
+  _paginationState['scalp_history'] = newPage;
+  renderScalpHistory(window._allScalpSignalsForHistory || []);
+}
+
 function renderScalpHistory(signals) {
   const tb = $('#scalp_history');
+  const pagerEl = $('#scalp_history_pager');
   if (!tb) return;
-  const statusFa = { open: '🟢 فعال', tp: '✅ سود', tp1: '✅ TP1', tp2: '✅ TP2', sl: '❌ ضرر', sl_risk_free: '🛡️ ریسک‌فری', trailing: '🔄 تریلینگ', closed: '⏰ بسته', timeout: '⏰ تایم‌اوت' };
+  window._allScalpSignalsForHistory = signals; // cache for pagination re-render
+  const statusFa = { open: '🟢 فعال', tp: '✅ سود', tp1: '✅ TP1', tp2: '✅ TP2', sl: '❌ ضرر', sl_risk_free: '🛡️ ریسک‌فری', trailing: '🔄 تریلینگ', closed: '⏰ بسته', timeout: '⏰ تایم‌اوت', no_position: '⏭️ رد شد' };
 
   // Apply setup filter to history too
   let filtered = signals;
@@ -1608,7 +1684,8 @@ function renderScalpHistory(signals) {
       return rat.includes(setupKey) || hitNames.includes(setupKey);
     });
   }
-  tb.innerHTML = filtered.slice(0, 50).map(s => {
+  const { pageItems, page, totalPages } = paginate(filtered, 'scalp_history', 15);
+  tb.innerHTML = pageItems.map(s => {
     const curPrice = livePrices[s.symbol] ? fmtPrice(livePrices[s.symbol]) : '...';
     const curColor = livePrices[s.symbol] ? (livePrices[s.symbol] > s.entry ? (s.side === 'long' ? 'var(--success)' : 'var(--danger)') : (s.side === 'long' ? 'var(--danger)' : 'var(--success)')) : '';
     const st = s.status || 'open';
@@ -1628,6 +1705,7 @@ function renderScalpHistory(signals) {
       <td>${[...new Set(s.hits.map(h => h.name))].join(', ')}</td>
     </tr>`;
   }).join('');
+  if (pagerEl) pagerEl.innerHTML = renderPaginationControls('scalp_history', totalPages, page, 'changeScalpHistoryPage');
 }
 
 /* ═══ Click a closed/open scalp trade row → show entry/exit/SL/TP on chart ═══ */
@@ -2472,23 +2550,32 @@ function renderLitLiveMetrics() {
   document.getElementById('lit_live_best').textContent = best;
 }
 
+function changeLitLiveListPage(newPage) {
+  _paginationState['lit_live_signals'] = newPage;
+  renderLitLiveList();
+}
+
 function renderLitLiveList() {
   const tbody = document.getElementById('lit_live_signals');
+  const pagerEl = document.getElementById('lit_live_signals_pager');
   if (!tbody) return;
   const filter = document.getElementById('lit_live_filter')?.value || 'all';
   const filtered = filter === 'all' ? litLiveSignals : litLiveSignals.filter(s => s.side === filter);
 
   if (filtered.length === 0) {
     tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-muted)">هنوز سیگنالی ثبت نشده</td></tr>';
+    if (pagerEl) pagerEl.innerHTML = '';
     return;
   }
 
-  tbody.innerHTML = filtered.map((s) => {
+  const { pageItems, page, totalPages } = paginate(filtered, 'lit_live_signals', 15);
+
+  tbody.innerHTML = pageItems.map((s) => {
     const sideFa = s.side === 'long' ? '🟢' : '🔴';
     const strat = LIT_STRATEGY_NAMES[s.strategy]?.fa || s.strategy || 'LIT';
     const tf = s.timeframe || '15m';
     const status = s.status || 'open';
-    const statusFa = { open: '🟢 فعال', tp: '✅ سود', tp1: '✅ TP1', tp2: '✅ TP2', tp3: '✅ TP3', sl: '❌ ضرر', sl_risk_free: '🛡️ ریسک‌فری', win: '✅ سود', loss: '❌ ضرر', expired: '⏰ منقضی', timeout: '⏰ تایم‌اوت' }[status] || status;
+    const statusFa = { open: '🟢 فعال', tp: '✅ سود', tp1: '✅ TP1', tp2: '✅ TP2', tp3: '✅ TP3', sl: '❌ ضرر', sl_risk_free: '🛡️ ریسک‌فری', win: '✅ سود', loss: '❌ ضرر', expired: '⏰ منقضی', timeout: '⏰ تایم‌اوت', no_position: '⏭️ رد شد' }[status] || status;
     const time = s.created_at ? new Date(s.created_at * 1000).toLocaleString('fa-IR', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '—';
     const score = s.score ? s.score.toFixed(2) : '—';
     const scoreColor = s.score >= 0.8 ? 'var(--success)' : s.score >= 0.7 ? 'var(--info)' : 'var(--text-muted)';
@@ -2504,6 +2591,7 @@ function renderLitLiveList() {
       <td style="font-size:11px">${statusFa}</td>
     </tr>`;
   }).join('');
+  if (pagerEl) pagerEl.innerHTML = renderPaginationControls('lit_live_signals', totalPages, page, 'changeLitLiveListPage');
 }
 
 // ═══ Show live signal on chart ═══
@@ -2591,26 +2679,40 @@ async function showLitSignalOnChart(signalId, timeframe) {
       const annResp = await fetch(`/api/lit/analyze/${sig.symbol.replace('/', '-')}?timeframe=${tf}`);
       const annData = await annResp.json();
       
-      // Only draw the MOST relevant annotations (max 3 FVG + 2 OB + 2 liquidity)
+      // Draw the FULL SPACE of each zone (top + bottom boundary lines)
+      // instead of a single midpoint line — lightweight-charts v4 has no
+      // native rectangle primitive, so two matching-color boundary lines
+      // is the clearest way to convey "this whole price range is the zone"
+      // rather than implying it's just one flat level.
       const fvgZones = (annData.fvg_zones || sig.fvg_zones || []).slice(-2);
       fvgZones.forEach(fvg => {
         if (fvg.top && fvg.bottom && Math.abs(fvg.top - fvg.bottom) > 0) {
-          const fvgColor = fvg.direction === 'bullish' ? '#8b5cf680' : '#ec489980';
+          const fvgColor = fvg.direction === 'bullish' ? '#8b5cf6' : '#ec4899';
+          const arrow = fvg.direction === 'bullish' ? '↑' : '↓';
           litLiveCandleSeries.createPriceLine({
-            price: (fvg.top + fvg.bottom) / 2, color: fvgColor, lineWidth: 2, lineStyle: 0,
-            axisLabelVisible: false, title: `━━ FVG ${fvg.direction === 'bullish' ? '↑' : '↓'} ━━`,
+            price: fvg.top, color: fvgColor, lineWidth: 1, lineStyle: 2,
+            axisLabelVisible: true, title: `FVG${arrow} بالا`,
+          });
+          litLiveCandleSeries.createPriceLine({
+            price: fvg.bottom, color: fvgColor, lineWidth: 1, lineStyle: 2,
+            axisLabelVisible: true, title: `FVG${arrow} پایین`,
           });
         }
       });
 
-      // Draw max 2 Order Blocks (most recent)
+      // Draw max 2 Order Block zones (full space, top+bottom)
       const obZones = (annData.order_blocks || sig.order_blocks || []).slice(-2);
       obZones.forEach(ob => {
         if (ob.top && ob.bottom) {
           const obColor = ob.direction === 'bullish' ? '#06b6d4' : '#f97316';
+          const arrow = ob.direction === 'bullish' ? '↑' : '↓';
           litLiveCandleSeries.createPriceLine({
-            price: (ob.top + ob.bottom) / 2, color: obColor, lineWidth: 2, lineStyle: 1,
-            axisLabelVisible: false, title: `OB ${ob.direction === 'bullish' ? '↑' : '↓'}`,
+            price: ob.top, color: obColor, lineWidth: 1, lineStyle: 1,
+            axisLabelVisible: true, title: `OB${arrow} بالا`,
+          });
+          litLiveCandleSeries.createPriceLine({
+            price: ob.bottom, color: obColor, lineWidth: 1, lineStyle: 1,
+            axisLabelVisible: true, title: `OB${arrow} پایین`,
           });
         }
       });
@@ -3035,28 +3137,37 @@ async function litShowTradeOnChart(idx) {
     const annResp = await fetch(`/api/lit/analyze/${symPath}?timeframe=${tf}`);
     const annData = await annResp.json();
 
-    // Max 2 FVG zones (midpoint line only — cleaner)
+    // Max 2 FVG zones — draw the FULL space (top + bottom), not just a
+    // midpoint line, so the actual imbalance range is visible on the chart.
     const fvgZones = (annData.fvg_zones || []).slice(-2);
     fvgZones.forEach(fvg => {
       if (fvg.top && fvg.bottom) {
-        const mid = (fvg.top + fvg.bottom) / 2;
-        const fvgColor = fvg.direction === 'bullish' ? '#8b5cf680' : '#ec489980';
+        const fvgColor = fvg.direction === 'bullish' ? '#8b5cf6' : '#ec4899';
+        const arrow = fvg.direction === 'bullish' ? '↑' : '↓';
         _litPriceLines.push(litCandleSeries.createPriceLine({
-          price: mid, color: fvgColor, lineWidth: 2, lineStyle: 0,
-          axisLabelVisible: false, title: `FVG ${fvg.direction === 'bullish' ? '↑' : '↓'}`,
+          price: fvg.top, color: fvgColor, lineWidth: 1, lineStyle: 2,
+          axisLabelVisible: true, title: `FVG${arrow} بالا`,
+        }));
+        _litPriceLines.push(litCandleSeries.createPriceLine({
+          price: fvg.bottom, color: fvgColor, lineWidth: 1, lineStyle: 2,
+          axisLabelVisible: true, title: `FVG${arrow} پایین`,
         }));
       }
     });
 
-    // Max 1 OB (midpoint)
+    // Max 1 OB zone (full space)
     const obZones = (annData.order_blocks || []).slice(-1);
     obZones.forEach(ob => {
       if (ob.top && ob.bottom) {
-        const mid = (ob.top + ob.bottom) / 2;
         const obColor = ob.direction === 'bullish' ? '#06b6d4' : '#f97316';
+        const arrow = ob.direction === 'bullish' ? '↑' : '↓';
         _litPriceLines.push(litCandleSeries.createPriceLine({
-          price: mid, color: obColor, lineWidth: 2, lineStyle: 1,
-          axisLabelVisible: false, title: `OB ${ob.direction === 'bullish' ? '↑' : '↓'}`,
+          price: ob.top, color: obColor, lineWidth: 1, lineStyle: 1,
+          axisLabelVisible: true, title: `OB${arrow} بالا`,
+        }));
+        _litPriceLines.push(litCandleSeries.createPriceLine({
+          price: ob.bottom, color: obColor, lineWidth: 1, lineStyle: 1,
+          axisLabelVisible: true, title: `OB${arrow} پایین`,
         }));
       }
     });
