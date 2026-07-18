@@ -2379,90 +2379,81 @@ let litChart = null;
 let litCandleSeries = null;
 let litVolumeSeries = null;
 
+// ─── نام‌های نمایشی استراتژی‌های LIT ───
+// این‌ها دقیقاً همان ۳ ستاپی هستند که موتور LIT واقعاً تولید می‌کند
+// (strategies/lit_patterns.py -> SetupType). چند نام قدیمی/عمومی هم برای
+// سازگاری با نسخه‌های قبلی نگه داشته شده‌اند.
 const LIT_STRATEGY_NAMES = {
+  'sweep_reversal':          { fa: '🌊 شکار و برگشت', full: 'Sweep Reversal' },
+  'inducement_continuation': { fa: '🎯 تله و ادامه', full: 'Inducement Continuation' },
+  'range_expansion':         { fa: '📐 محدوده به انبساط', full: 'Range Expansion' },
+  // نام‌های قدیمی — فقط برای نمایش صحیح سیگنال‌های ثبت‌شده قبلی
   'liquidity_sweep': { fa: '🔥 جاروب نقدینگی', full: 'Liquidity Sweep' },
   'fvg':             { fa: '📦 شکاف منصفانه', full: 'Fair Value Gap' },
   'order_block':     { fa: '🧱 بلاک سفارش', full: 'Order Block' },
   'power_of_three':  { fa: '⚡ سه‌گانه قدرت', full: 'Power of Three' },
   'vector_bos':      { fa: '🎯 شکست ساختار', full: 'Vector BOS' },
-  'sweep_reversal':  { fa: '🌊 شکار و برگشت', full: 'Sweep Reversal' },
-  'inducement_continuation': { fa: '🎯 تله و ادامه', full: 'Inducement Continuation' },
-  'range_expansion': { fa: '📐 محدوده به انبساط', full: 'Range Expansion' },
   'fvg_retest':      { fa: '📦 ریتست FVG', full: 'FVG Retest' },
   'displacement_entry': { fa: '💥 ورود با جابجایی', full: 'Displacement Entry' },
   'lit_structure':   { fa: '📊 ساختار LIT', full: 'LIT Structure' },
 };
 
+// ─── محتوای آموزشی — دقیقاً منطبق با منطق واقعی موتور LIT ───
+// هر بخش گام‌به‌گام همان مراحلی را توضیح می‌دهد که کد در
+// strategies/lit_structure.py / lit_liquidity.py / lit_patterns.py طی
+// می‌کند، تا کاربر بفهمد چرا یک سیگنال خاص صادر شده.
 const LIT_STRATEGY_EDUCATION = {
+  'sweep_reversal': {
+    title: '🌊 شکار و برگشت (Sweep-Reversal)',
+    what: 'رایج‌ترین و قوی‌ترین ستاپ LIT. وقتی قیمت به یک سطح نقدینگی (سقف/کف قبلی یا سقف‌ها/کف‌های برابر که استاپ‌لاس زیادی پشتشان جمع شده) می‌رسد، آن را «جاروب» می‌کند و بعد به‌شدت برمی‌گردد — این برگشت نشانه ورود پول هوشمند در جهت مخالف است.',
+    how: [
+      '۱) یک سطح نقدینگی (سقف/کف قبلی یا چند سقف/کف نزدیک به هم) شناسایی می‌شود',
+      '۲) قیمت با یک سایه بلند از آن سطح عبور می‌کند (Sweep) — ولی کندل بعدی دوباره به همان سمت برنمی‌گردد (یعنی برگشت واقعی است، نه یک شکست موقت)',
+      '۳) بعد از این جاروب، یک تغییر ساختار (CHoCH) یا شکست ساختار (BOS) در جهت مخالف تأیید می‌شود',
+      '۴) یک کندل قوی (Displacement) با بدنه بزرگ در جهت برگشت شکل می‌گیرد',
+      '۵) اگر تمام این شرایط هم‌زمان برقرار باشند و امتیاز کلی از حد آستانه بگذرد، سیگنال صادر می‌شود',
+    ],
+    entry: 'نزدیک قیمت فعلی بعد از تأیید کندل جهنده (Displacement)',
+    sl: 'پشت نقطه‌ای که قیمت جاروب کرد (فراتر از سایه Sweep)',
+    tp: 'TP1: حداقل ۱.۵ برابر ریسک | TP2: نزدیک‌ترین سطح نقدینگی مخالف (هدف واقعی بازار)',
+    tip: 'هرچه سطح جاروب‌شده قوی‌تر باشد (چند بار لمس شده) و حجم معامله بالاتر باشد، اعتماد سیگنال بیشتر است.',
+  },
+  'inducement_continuation': {
+    title: '🎯 تله و ادامه (Inducement-Continuation)',
+    what: 'وقتی روند تایم‌فریم بالا (۱ساعته/۴ساعته) مشخص و قوی است، بازار گاهی یک عقب‌نشینی کوچک (Pullback) می‌کند که معامله‌گران مبتدی را به گرفتن پوزیشن مخالف روند «تله» می‌زند، سپس دوباره در جهت اصلی روند ادامه می‌دهد.',
+    how: [
+      '۱) روند تایم‌فریم بالا (HTF) باید صعودی یا نزولی باشد — این ستاپ در بازار خنثی (Range) فعال نمی‌شود',
+      '۲) در طول عقب‌نشینی، یک نقدینگی داخلی (سقف/کف کوچک) جاروب می‌شود',
+      '۳) بعد از جاروب، یک شکست ساختار (BOS) هم‌جهت با روند اصلی تأیید می‌شود',
+      '۴) یک کندل قوی در جهت روند اصلی شکل می‌گیرد',
+      '۵) ورود در جهت روند اصلی، نه در جهت عقب‌نشینی',
+    ],
+    entry: 'نزدیک قیمت فعلی، پس از تأیید BOS هم‌جهت با روند اصلی',
+    sl: 'پشت نقدینگی داخلی که جاروب شد',
+    tp: 'TP1: حداقل ۱.۵ برابر ریسک | TP2: نزدیک‌ترین نقدینگی خارجی در جهت روند اصلی',
+    tip: 'این ستاپ فقط هم‌جهت با روند بزرگ‌تر معامله می‌کند — امن‌تر از شکار و برگشت است چون خلاف روند اصلی وارد نمی‌شود.',
+  },
+  'range_expansion': {
+    title: '📐 محدوده به انبساط (Range-Expansion)',
+    what: 'وقتی قیمت مدتی در یک محدوده فشرده (رنج) نوسان کرده (نه صعودی نه نزولی)، معمولاً یک طرف رنج جاروب می‌شود و بعد قیمت با یک حرکت انبساطی قوی از رنج خارج می‌شود.',
+    how: [
+      '۱) یک محدوده فشرده (رنج کمتر از ۴ برابر ATR) در ۳۰ کندل اخیر شناسایی می‌شود',
+      '۲) یک طرف این رنج (سقف یا کف) جاروب می‌شود',
+      '۳) یک کندل جهنده (Displacement) در جهت مخالف طرف جاروب‌شده ظاهر می‌شود',
+      '۴) ورود در جهت انبساط (خروج از رنج)، معمولاً روی جهش سریع قیمت',
+    ],
+    entry: 'نزدیک قیمت فعلی، بلافاصله پس از کندل انبساطی',
+    sl: 'پشت طرف رنج که جاروب شد',
+    tp: 'TP1: حداقل ۱.۵ برابر ریسک | TP2: نزدیک‌ترین نقدینگی در جهت انبساط',
+    tip: 'این ستاپ معمولاً کمی ریسک‌پذیرتر است چون شرط تأیید ساختاری (BOS/CHoCH) کمتری نسبت به دو ستاپ دیگر دارد — به همین دلیل هم‌راستایی با روند تایم‌فریم بالا اهمیت بیشتری پیدا می‌کند.',
+  },
+  // نام‌های قدیمی — برای سیگنال‌های قدیمی که هنوز در دیتابیس‌اند
   'liquidity_sweep': {
-    title: '🔥 جاروب نقدینگی (Liquidity Sweep)',
-    what: 'بازارسازان (Smart Money) قیمت را به سطوحی حرکت می‌دهند که حجم زیادی Stop Loss در آنجا تجمع کرده. وقتی این استاپ‌ها فعال شوند، نقدینگی آزاد می‌شود.',
-    how: [
-      'قیمت به سطح حمایت/مقاومت قبلی می‌رسد (یا بالای سقف/زیر کف قبلی می‌رود)',
-      'کندل سایه بلند با حجم بالا تشکیل می‌شود',
-      'بلافاصله بعد از آن، قیمت در جهت مخالف برمی‌گردد',
-      'ورود: بعد از برگشت، در جهت مخالف وارد می‌شویم',
-    ],
-    entry: 'ورود بعد از تأیید برگشت (کندل برگشتی + حجم بالا)',
-    sl: 'زیر/بالای سایه کندل جاروب',
-    tp: 'TP1: سطح بعدی حمایت/مقاومت | TP2: هدف بزرگ‌تر',
-    tip: 'همیشه منتظر تأیید باشید — کندل برگشتی + حجم بالا = ورود امن',
-  },
-  'fvg': {
-    title: '📦 شکاف منصفانه (Fair Value Gap)',
-    what: 'وقتی قیمت با سرعت زیاد حرکت کند، شکافی در ساختار قیمت ایجاد می‌شود. بازار تمایل دارد این شکاف را پر کند.',
-    how: [
-      'سه کندل متوالی: کندل وسط کاملاً بالای/پایین دو کندل کناری باشد',
-      'شکاف بین سایه کندل اول و سایه کندل سوم = FVG',
-      'ورود وقتی قیمت به محدوده FVG برسد',
-      'TP: انتهای FVG یا کمی بالاتر/پایین‌تر',
-    ],
-    entry: 'ورود در محدوده FVG (بین سایه کندل اول و سوم)',
-    sl: 'زیر/بالای FVG با حاشیه امنیت',
-    tp: 'TP1: انتهای FVG | TP2: سطح بعدی',
-    tip: 'FVG در روند قوی قابل‌اعتمادتر است. در بازار رنج زیاد کار نمی‌کند.',
-  },
-  'order_block': {
-    title: '🧱 بلاک سفارش (Order Block)',
-    what: 'آخرین کندلی که قبل از یک حرکت بزرگ شکل گرفته. بازارسازان در این ناحیه سفارشات بزرگی قرار داده‌اند.',
-    how: [
-      'آخرین کندل معکوس قبل از یک روند قوی پیدا کنید',
-      'این کندل معمولاً خلاف جهت روند است',
-      'وقتی قیمت برمی‌گردد و این کندل را لمس می‌کند، انتظار واکنش داریم',
-      'ورود: لمس OB + تأیید برگشت',
-    ],
-    entry: 'ورود در محدوده OB + کندل تأییدی',
-    sl: 'زیر/بالای OB',
-    tp: 'TP1: نقطه شروع حرکت | TP2: ادامه روند',
-    tip: 'OB معمولاً فقط یک‌بار تست می‌شود. تست دوم قابل‌اعتماد نیست.',
-  },
-  'power_of_three': {
-    title: '⚡ سه‌گانه قدرت (Power of Three)',
-    what: 'سه مرحله حرکت بازار: تجمع (Accumulation) → جابجایی/تراپ (Manipulation) → توزیع (Distribution).',
-    how: [
-      'مرحله ۱: روند آرام یا رنج (تجمع سفارشات)',
-      'مرحله ۲: حرکت ناگهانی خلاف جهت اصلی (تراپ — فریب تریدرها)',
-      'مرحله ۳: حرکت قوی در جهت واقعی (ترند اصلی)',
-      'ورود: بعد از مرحله ۲، وقتی جهت واقعی مشخص شد',
-    ],
-    entry: 'ورود بعد از کندل تراپ + تأیید جهت واقعی',
-    sl: 'زیر/بالای مرحله تراپ',
-    tp: 'TP1: پایان مرحله تجمع | TP2: ادامه روند',
-    tip: 'ترید خلاف مرحله تراپ = سود بزرگ. ولی صبر کنید تا جهت واقعی مشخص شود.',
-  },
-  'vector_bos': {
-    title: '🎯 شکست ساختار برداری (Vector BOS)',
-    what: 'شکست قوی از ساختار بازار با کندل مومنتوم بالا. نشان‌دهنده ورود قوی Smart Money.',
-    how: [
-      'کندل با مومنتوم بالا (بدنه بزرگ، سایه کوتاه) پیدا کنید',
-      'شکست سقف/کف قبلی با قدرت',
-      'حجم بالا همراه شکست',
-      'ورود: در پولبک به سطح شکست',
-    ],
-    entry: 'ورود در پولبک به سطح BOS + تأیید',
-    sl: 'زیر/بالای سطح BOS',
-    tp: 'TP1: فاصله شکست از نقطه ورود | TP2: ادامه مومنتوم',
-    tip: 'BOS بدون حجم بالا = ضعیف. حجم تأیید کننده اصلی است.',
+    title: '🔥 جاروب نقدینگی (نام قدیمی — مشابه «شکار و برگشت»)',
+    what: 'نام قبلی همان ستاپ Sweep-Reversal. توضیحات کامل را در کارت «شکار و برگشت» ببینید.',
+    how: ['به کارت «🌊 شکار و برگشت» مراجعه کنید'],
+    entry: '—', sl: '—', tp: '—',
+    tip: 'این نام‌گذاری در نسخه‌های قدیمی‌تر استفاده می‌شد.',
   },
 };
 
@@ -2576,6 +2567,17 @@ function renderLitLiveList() {
     const tf = s.timeframe || '15m';
     const status = s.status || 'open';
     const statusFa = { open: '🟢 فعال', tp: '✅ سود', tp1: '✅ TP1', tp2: '✅ TP2', tp3: '✅ TP3', sl: '❌ ضرر', sl_risk_free: '🛡️ ریسک‌فری', win: '✅ سود', loss: '❌ ضرر', expired: '⏰ منقضی', timeout: '⏰ تایم‌اوت', no_position: '⏭️ رد شد' }[status] || status;
+    const statusTitle = {
+      open: 'این سیگنال هنوز باز است و در حال ردیابی قیمت زنده است',
+      tp: 'قیمت به هدف سود رسید و معامله با سود بسته شد',
+      tp1: 'قیمت به هدف اول سود (TP1) رسید و معامله بسته شد',
+      tp2: 'قیمت به هدف دوم سود (TP2) رسید و معامله بسته شد',
+      tp3: 'قیمت به هدف سوم سود (TP3) رسید و معامله بسته شد',
+      sl: 'قیمت به حد ضرر رسید و معامله با ضرر بسته شد',
+      sl_risk_free: 'معامله در حالت ریسک‌فری با ضرر صفر بسته شد',
+      timeout: 'معامله به دلیل گذشت زمان زیاد بدون رسیدن به TP/SL بسته شد',
+      no_position: 'تحلیل این سیگنال درست بود، اما چون تعداد پوزیشن‌های باز LIT به سقف مجاز رسیده بود، معامله واقعی برایش باز نشد',
+    }[status] || '';
     const time = s.created_at ? new Date(s.created_at * 1000).toLocaleString('fa-IR', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '—';
     const score = s.score ? s.score.toFixed(2) : '—';
     const scoreColor = s.score >= 0.8 ? 'var(--success)' : s.score >= 0.7 ? 'var(--info)' : 'var(--text-muted)';
@@ -2588,7 +2590,7 @@ function renderLitLiveList() {
       <td style="color:var(--success);font-size:11px">${fmtPrice(s.take_profit)}</td>
       <td style="color:var(--danger);font-size:11px">${fmtPrice(s.stop_loss)}</td>
       <td><b style="color:${scoreColor}">${score}</b></td>
-      <td style="font-size:11px">${statusFa}</td>
+      <td style="font-size:11px" title="${statusTitle}">${statusFa}</td>
     </tr>`;
   }).join('');
   if (pagerEl) pagerEl.innerHTML = renderPaginationControls('lit_live_signals', totalPages, page, 'changeLitLiveListPage');
@@ -2802,12 +2804,26 @@ function renderLitSignalDetail(sig) {
   const sideFa = sig.side === 'long' ? '🟢 Long (خرید)' : '🔴 Short (فروش)';
   const time = sig.created_at ? new Date(sig.created_at * 1000).toLocaleString('fa-IR') : '—';
   const scoreColor = sig.score >= 0.8 ? 'var(--success)' : 'var(--info)';
+  const statusFaDetail = { open: '🟢 فعال', tp: '✅ سود', tp1: '✅ TP1', tp2: '✅ TP2', tp3: '✅ TP3', sl: '❌ ضرر', sl_risk_free: '🛡️ ریسک‌فری', timeout: '⏰ تایم‌اوت', no_position: '⏭️ رد شد' };
+  const statusExplainDetail = {
+    open: 'این سیگنال هنوز باز است و در حال ردیابی قیمت زنده است.',
+    tp: 'قیمت به هدف سود رسید و معامله با سود بسته شد.', tp1: 'قیمت به TP1 رسید و معامله با سود بسته شد.',
+    tp2: 'قیمت به TP2 رسید و معامله با سود بسته شد.', tp3: 'قیمت به TP3 رسید و معامله با سود بسته شد.',
+    sl: 'قیمت به حد ضرر رسید و معامله با ضرر بسته شد.', sl_risk_free: 'معامله در حالت ریسک‌فری بسته شد.',
+    timeout: 'معامله بدون رسیدن به TP/SL و به دلیل گذشت زمان بسته شد.',
+    no_position: 'تحلیل این سیگنال درست بود، اما چون تعداد پوزیشن‌های باز LIT به سقف مجاز رسیده بود، معامله واقعی برایش باز نشد — این محدودیت مدیریت ریسک عمدی است، نه اشتباه تحلیل.',
+  };
+  const sigStatus = sig.status || 'open';
 
   let html = `
     <div style="background:rgba(99,102,241,0.06);border:1px solid rgba(99,102,241,0.15);border-radius:8px;padding:12px;margin-bottom:10px">
       <div style="font-size:12px;color:var(--text-muted)">${sig.symbol} | ${time}</div>
       <div style="font-size:16px;font-weight:bold;margin-top:4px">${sideFa}</div>
       <div style="font-size:13px;margin-top:2px">${strat.fa} | امتیاز: <b style="color:${scoreColor}">${sig.score?.toFixed(2)}</b></div>
+      <div style="font-size:12px;margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.08)">
+        وضعیت: <b>${statusFaDetail[sigStatus] || sigStatus}</b>
+        <div style="color:var(--text-muted);margin-top:2px">${statusExplainDetail[sigStatus] || ''}</div>
+      </div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px">
       <div style="background:rgba(88,166,255,0.08);border-radius:6px;padding:8px;text-align:center">
@@ -2849,10 +2865,15 @@ function renderLitSignalDetail(sig) {
 }
 
 // ═══ Education cards ═══
+const LIT_REAL_SETUPS = ['sweep_reversal', 'inducement_continuation', 'range_expansion'];
+
 function renderLitEduCards() {
   const container = document.getElementById('lit_edu_cards');
   if (!container) return;
-  container.innerHTML = Object.entries(LIT_STRATEGY_EDUCATION).map(([key, edu]) => {
+  // Only show the 3 setups the engine actually produces — the legacy
+  // key(s) kept in LIT_STRATEGY_EDUCATION are for name-lookup fallback
+  // only and would just confuse the education tab if shown as cards.
+  container.innerHTML = LIT_REAL_SETUPS.map(key => [key, LIT_STRATEGY_EDUCATION[key]]).map(([key, edu]) => {
     return `<div class="settings-card" style="border-top:3px solid var(--accent)">
       <div style="font-size:16px;font-weight:bold;margin-bottom:8px">${edu.title}</div>
       <div style="font-size:13px;line-height:1.8;margin-bottom:12px;color:var(--text-muted)">${edu.what}</div>

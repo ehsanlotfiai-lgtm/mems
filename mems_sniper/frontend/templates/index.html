@@ -267,6 +267,12 @@
                     <option value="short">فقط شورت</option>
                   </select>
                 </div>
+                <div style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:6px;padding:8px 10px;margin:0 8px 8px;font-size:11px;line-height:1.8;color:var(--text-muted)">
+                  ℹ️ راهنمای وضعیت‌ها: <b style="color:var(--success)">✅ TP1/TP2/TP3</b> = معامله به سود بسته شد &nbsp;|&nbsp;
+                  <b style="color:var(--danger)">❌ SL</b> = معامله با ضرر بسته شد &nbsp;|&nbsp;
+                  <b style="color:var(--accent)">🟢 فعال</b> = هنوز باز است &nbsp;|&nbsp;
+                  <b>⏭️ رد شد</b> = تحلیل درست بود اما چون تعداد پوزیشن‌های باز LIT به سقف مجاز رسیده بود، معامله واقعی باز نشد (سیگنال صرفاً برای اطلاع ثبت شده، اشتباه سیستم نیست)
+                </div>
                 <div style="overflow-x:auto;max-height:400px;overflow-y:auto">
                   <table class="table" style="font-size:12px">
                     <thead style="position:sticky;top:0;background:#161b22;z-index:1">
@@ -395,6 +401,33 @@
 
         <!-- ═══ بخش آموزش ═══ -->
         <div id="lit_sub_edu" class="lit-subtab-panel" style="display:none">
+          <div class="settings-card" style="border-top:3px solid #a855f7;margin-bottom:14px">
+            <div style="font-size:16px;font-weight:bold;margin-bottom:8px">🧠 استراتژی LIT چیست؟</div>
+            <div style="font-size:13px;line-height:2;color:var(--text-muted)">
+              LIT مخفف <b>Liquidity Inducement Theorem</b> است — یک روش پرایس‌اکشن مبتنی بر ردیابی نقدینگی
+              (جایی که استاپ‌لاس‌های زیادی جمع شده) و رفتار «پول هوشمند» (Smart Money) در بازار.
+              موتور LIT در این پنل به‌صورت خودکار قیمت را در ۵ لایه تحلیل می‌کند:
+            </div>
+            <ol style="font-size:12px;line-height:2.2;padding-right:16px;margin:10px 0 0 0;color:var(--text)">
+              <li><b>ساختار بازار</b> — پیدا کردن سقف/کف‌های مهم و تشخیص روند (صعودی/نزولی/خنثی)</li>
+              <li><b>نقدینگی</b> — پیدا کردن جایی که احتمالاً استاپ‌لاس زیادی جمع شده و بررسی اینکه آیا قیمت آنجا را «جاروب» کرده یا نه</li>
+              <li><b>تشخیص ستاپ</b> — بررسی اینکه آیا شرایط یکی از ۳ ستاپ زیر برقرار است</li>
+              <li><b>محاسبه ورود/خروج</b> — تعیین دقیق نقطه ورود، حد ضرر (SL) و حد سود (TP1/TP2) بر اساس ساختار واقعی بازار</li>
+              <li><b>امتیازدهی</b> — ترکیب همه فاکتورها (هم‌جهتی با روند بزرگ‌تر، کیفیت جاروب نقدینگی، حجم، و غیره) در یک امتیاز نهایی؛ فقط سیگنال‌هایی با امتیاز کافی نمایش داده می‌شوند</li>
+            </ol>
+          </div>
+
+          <div class="settings-card" style="border-top:3px solid var(--accent);margin-bottom:14px">
+            <div style="font-size:16px;font-weight:bold;margin-bottom:8px">📌 وضعیت‌های سیگنال — یعنی چی؟</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;font-size:12px;line-height:1.8">
+              <div style="background:rgba(34,197,94,0.08);border-radius:6px;padding:8px"><b style="color:var(--success)">✅ TP1 / TP2 / TP3</b><br>قیمت به هدف سود رسید و معامله با سود بسته شد.</div>
+              <div style="background:rgba(239,68,68,0.08);border-radius:6px;padding:8px"><b style="color:var(--danger)">❌ SL</b><br>قیمت به حد ضرر رسید و معامله با ضرر بسته شد.</div>
+              <div style="background:rgba(88,166,255,0.08);border-radius:6px;padding:8px"><b style="color:var(--accent)">🟢 فعال</b><br>سیگنال هنوز باز است؛ در حال ردیابی قیمت زنده.</div>
+              <div style="background:rgba(245,158,11,0.08);border-radius:6px;padding:8px"><b>⏭️ رد شد</b><br>تحلیل درست بود، اما چون تعداد پوزیشن‌های باز LIT به سقف مجاز رسیده بود، معامله واقعی باز نشد. این یک محدودیت مدیریت ریسک عمدی است، نه خطای تحلیل.</div>
+            </div>
+          </div>
+
+          <div style="font-size:14px;font-weight:bold;margin-bottom:10px">📚 سه ستاپ اصلی LIT</div>
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px" id="lit_edu_cards"></div>
         </div>
       </section>
