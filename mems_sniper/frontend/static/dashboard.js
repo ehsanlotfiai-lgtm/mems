@@ -91,6 +91,10 @@ async function resetSection(section) {
 }
 
 /* ---------- TABS ---------- */
+document.querySelector('[data-tab="signals"]')?.addEventListener('click', () => {
+  setTimeout(() => ensureSignalStrategyStats(), 50);
+});
+
 $$('.tab-btn').forEach(btn => btn.addEventListener('click', () => {
   $$('.tab-btn').forEach(b => b.classList.remove('active'));
   $$('.tab-panel').forEach(p => p.classList.remove('active'));
@@ -202,7 +206,7 @@ const liveSignalBox = $('#signals_live');
 
 function renderSignalCard(s) {
   const sideFa = s.side === 'long' ? '🟢 خرید (LONG)' : '🔴 فروش (SHORT)';
-  const methods = [...new Set(s.hits.map(h => h.name))];
+  const methods = [...new Set(((s.hits || []).map(h => h.name)).filter(Boolean))];
   const methodFa = {
     new_listing: '🆕 تازه‌لیست', volume_spike: '🔊 حجم', orderbook_imbalance: '⚖️ اردربوک',
     liquidity_grab: '🌊 شکار', momentum_ignition: '🔥 مومنتوم', rsi_divergence: '📊 واگرایی',
@@ -268,8 +272,9 @@ function renderSignalCard(s) {
 function addLiveSignal(s) {
   stateCache.signals.unshift(s);
   if (stateCache.signals.length > 30) stateCache.signals.pop();
-  liveSignalBox.insertAdjacentHTML('afterbegin', renderSignalCard(s));
-  $('#signal_count').textContent = stateCache.signals.length;
+  liveStrategyFilterOptions = [...new Set(stateCache.signals.flatMap(getSignalStrategies))].sort();
+  renderLiveStrategyFilterOptions();
+  renderLiveSignals();
 }
 
 /* Signal status filter */
@@ -285,10 +290,9 @@ async function loadSignals() {
   try {
     const { signals } = await json('/api/signals?limit=100');
     stateCache.signals = signals.slice(0, 30);
-    // Filter live cards
-    const filtered = signalFilter === 'all' ? stateCache.signals : stateCache.signals.filter(s => (s.status || 'open') === signalFilter);
-    liveSignalBox.innerHTML = filtered.map(renderSignalCard).join('') || '<p style="color:#8e95ac">سیگنالی در این دسته نیست.</p>';
-    $('#signal_count').textContent = signals.length;
+    liveStrategyFilterOptions = [...new Set(stateCache.signals.flatMap(getSignalStrategies))].sort();
+    renderLiveStrategyFilterOptions();
+    renderLiveSignals();
     // history table (paginated — see renderSignalsHistoryPage)
     window._allSignalsHistory = signals;
     renderSignalsHistoryPage();
@@ -357,29 +361,21 @@ async function fetchPricesForSignals(signals) {
 async function loadSignalWinRates() {
   try {
     const resp = await json('/api/trades/win-rates');
-    const win_rates = resp.win_rates;
-    const strategy_stats = resp.strategy_stats || {};
+    const win_rates = resp.win_rates || {};
+    const strategy_stats = resp.strategy_stats || resp.by_strategy || {};
     if (!win_rates) return;
-    
-    const periods = [
-      { key: 'hourly', label: 'آخرین ساعت' },
-      { key: '4hour', label: 'آخرین ۴ ساعت' },
-      { key: 'daily', label: 'امروز' },
-      { key: 'weekly', label: 'هفته اخیر' },
-    ];
-    
-    // Update the grid boxes
+
     const el1h = document.getElementById('sig_wr_5m');
     const el30 = document.getElementById('sig_wr_30m');
     const el1 = document.getElementById('sig_wr_1h');
     const el4h = document.getElementById('sig_wr_4h');
     const el24h = document.getElementById('sig_wr_24h');
-    
+
     const hr = win_rates.hourly || {};
     const h4 = win_rates['4hour'] || {};
     const dy = win_rates.daily || {};
     const wk = win_rates.weekly || {};
-    
+
     const fmt = (d) => {
       if (!d || d.total === 0) return '—';
       return d.win_rate + '%';
@@ -392,36 +388,73 @@ async function loadSignalWinRates() {
       if (!d || d.total === 0) return 'color:var(--text-muted)';
       return d.win_rate >= 60 ? 'color:var(--success)' : d.win_rate >= 40 ? 'color:var(--accent)' : 'color:var(--danger)';
     };
-    
-    if (el1h) { el1h.innerHTML = `<span style="${color(hr)}">${fmt(hr)}</span><br><small style="color:var(--text-muted)">${sub(hr)}</small>`; }
-    if (el30) { el30.innerHTML = `<span style="${color(h4)}">${fmt(h4)}</span><br><small style="color:var(--text-muted)">${sub(h4)}</small>`; }
-    if (el1) { el1.innerHTML = `<span style="${color(dy)}">${fmt(dy)}</span><br><small style="color:var(--text-muted)">${sub(dy)}</small>`; }
-    if (el4h) { el4h.innerHTML = `<span style="${color(wk)}">${fmt(wk)}</span><br><small style="color:var(--text-muted)">${sub(wk)}</small>`; }
-    if (el24h) { 
-      // Total all-time
+
+    if (el1h) el1h.innerHTML = `<span style="${color(hr)}">${fmt(hr)}</span><br><small style="color:var(--text-muted)">${sub(hr)}</small>`;
+    if (el30) el30.innerHTML = `<span style="${color(h4)}">${fmt(h4)}</span><br><small style="color:var(--text-muted)">${sub(h4)}</small>`;
+    if (el1) el1.innerHTML = `<span style="${color(dy)}">${fmt(dy)}</span><br><small style="color:var(--text-muted)">${sub(dy)}</small>`;
+    if (el4h) el4h.innerHTML = `<span style="${color(wk)}">${fmt(wk)}</span><br><small style="color:var(--text-muted)">${sub(wk)}</small>`;
+    if (el24h) {
       const all = win_rates.all || {};
-      el24h.innerHTML = `<span style="${color(all)}">${fmt(all)}</span><br><small style="color:var(--text-muted)">${sub(all)}</small>`; 
+      el24h.innerHTML = `<span style="${color(all)}">${fmt(all)}</span><br><small style="color:var(--text-muted)">${sub(all)}</small>`;
     }
-    // Render per-strategy win rates
+
     const stratBox = document.getElementById('sig_strategy_stats');
-    if (stratBox && Object.keys(strategy_stats).length > 0) {
-      const sn = {'confluence':'🔗 کانفلوئنس','momentum':'🔥 مومنتوم','breakout':'🚀 بریک‌اوت','reversal':'🔄 ریورسال','trend':'📈 ترند','range':'📦 رنج','volume':'📊 حجم','pattern':'🕯 پترن','unknown':'📋 سایر'};
-      var html = '<div style="margin-top:16px"><h4 style="margin:0 0 10px 0;font-size:13px;color:var(--text-muted)">📊 وین ریت هر استراتژی</h4><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px">';
-      Object.entries(strategy_stats).sort(function(a,b){return b[1].total-a[1].total;}).forEach(function(e){
-        var nm=e[0],st=e[1];
-        var wc=st.win_rate>=60?'var(--success)':st.win_rate>=40?'var(--accent)':'var(--danger)';
-        var pc=st.avg_pnl>=0?'var(--success)':'var(--danger)';
-        html+='<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:10px;text-align:center">'
-          +'<div style="font-size:11px;font-weight:bold;margin-bottom:4px">'+(sn[nm]||nm)+'</div>'
-          +'<div style="font-size:20px;font-weight:bold;color:'+(st.total>0?wc:'var(--text-dim)')+'">'+( st.total>0?st.win_rate+'%':'—')+'</div>'
-          +'<div style="font-size:11px;color:var(--text-muted)">'+st.wins+'W / '+st.losses+'L ('+st.total+' ترید)</div>'
-          +'<div style="font-size:11px;color:'+pc+'">میانگین: '+(st.avg_pnl>=0?'+':'')+st.avg_pnl+'%</div>'
-          +'</div>';
-      });
+    if (stratBox) {
+      if (!Object.keys(strategy_stats).length) {
+        stratBox.innerHTML = '<p style="color:var(--text-muted);font-size:12px;margin:8px 0">وین‌ریت استراتژی‌ها هنوز از API برنگشته است.</p>';
+        return;
+      }
+
+      const sn = {
+        confluence: '🔗 کانفلوئنس',
+        momentum: '🔥 مومنتوم',
+        breakout: '🚀 بریک‌اوت',
+        reversal: '🔄 ریورسال',
+        trend: '📈 ترند',
+        range: '📦 رنج',
+        volume: '📊 حجم',
+        pattern: '🕯 پترن',
+        unknown: '📋 سایر'
+      };
+
+      let html = '<div style="margin-top:16px"><h4 style="margin:0 0 10px 0;font-size:13px;color:var(--text-muted)">📊 وین ریت هر استراتژی</h4><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px">';
+
+      Object.entries(strategy_stats)
+        .sort((a, b) => (b[1].total || 0) - (a[1].total || 0))
+        .forEach(([nm, st]) => {
+          st.total = st.total || 0;
+          st.wins = st.wins || 0;
+          st.losses = st.losses || 0;
+          st.win_rate = Number(st.win_rate || 0);
+          st.avg_pnl = Number(st.avg_pnl || 0);
+
+          const wc = st.win_rate >= 60 ? 'var(--success)' : st.win_rate >= 40 ? 'var(--accent)' : 'var(--danger)';
+          const pc = st.avg_pnl >= 0 ? 'var(--success)' : 'var(--danger)';
+
+          html += '<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:10px;text-align:center">'
+            + `<div style="font-size:11px;font-weight:bold;margin-bottom:4px">${sn[nm] || nm}</div>`
+            + `<div style="font-size:20px;font-weight:bold;color:${st.total > 0 ? wc : 'var(--text-dim)'}">${st.total > 0 ? st.win_rate.toFixed(1) + '%' : '—'}</div>`
+            + `<div style="font-size:11px;color:var(--text-muted)">${st.wins}W / ${st.losses}L (${st.total} ترید)</div>`
+            + `<div style="font-size:11px;color:${pc}">میانگین: ${st.avg_pnl >= 0 ? '+' : ''}${st.avg_pnl.toFixed(2)}%</div>`
+            + '</div>';
+        });
+
       html += '</div></div>';
       stratBox.innerHTML = html;
     }
-  } catch(e) { console.debug('Signal WR:', e); }
+  } catch (e) {
+    console.debug('Signal WR:', e);
+  }
+}
+
+async function ensureSignalStrategyStats() {
+  try {
+    const box = document.getElementById('sig_strategy_stats');
+    if (!box) return;
+    if (!box.innerHTML.trim()) await loadSignalWinRates();
+  } catch (e) {
+    console.debug(e);
+  }
 }
 
 /* Position filter */
@@ -1581,7 +1614,7 @@ function setScalpFilter(f) {
 
 function renderScalpSignalCard(s) {
   const sideFa = s.side === 'long' ? '🟢 خرید (LONG)' : '🔴 فروش (SHORT)';
-  const methods = [...new Set(s.hits.map(h => h.name))];
+  const methods = [...new Set(((s.hits || []).map(h => h.name)).filter(Boolean))];
   const statusFa = { open: '🟢 فعال', tp: '✅ سود', sl: '❌ ضرر', trailing: '🔄 تریلینگ', closed: '⏰ بسته', no_position: '⏭️ رد شد (ظرفیت پر)' };
   const statusClass = { open: 'status-active', tp: 'status-tp', sl: 'status-sl', trailing: 'status-trailing', closed: 'status-closed' };
   const displayName = s.base || s.symbol;
