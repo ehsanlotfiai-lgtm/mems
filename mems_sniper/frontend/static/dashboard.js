@@ -203,10 +203,49 @@ function renderMarketSentiment(s) {
 const stateCache = { signals: [], universe: {} };
 let livePrices = {};  // {symbol: price} — live prices from WebSocket
 const liveSignalBox = $('#signals_live');
+let liveStrategyFilter = 'all';
+let liveStrategyFilterOptions = [];
+
+function getSignalStrategies(s) {
+  return [...new Set(((s && s.hits) ? s.hits : []).map(h => h && h.name).filter(Boolean))];
+}
+
+function renderLiveStrategyFilterOptions() {
+  const wrap = document.getElementById('signals_strategy_filter');
+  if (!wrap) return;
+  const strategies = liveStrategyFilterOptions || [];
+  wrap.innerHTML = [
+    `<button class="btn ${liveStrategyFilter === 'all' ? 'active' : ''}" onclick="setLiveStrategyFilter('all')">همه استراتژی‌ها</button>`,
+    ...strategies.map(name => `<button class="btn ${liveStrategyFilter === name ? 'active' : ''}" onclick="setLiveStrategyFilter('${name}')">${name}</button>`)
+  ].join('');
+}
+
+function setLiveStrategyFilter(name) {
+  liveStrategyFilter = name || 'all';
+  renderLiveStrategyFilterOptions();
+  renderLiveSignals();
+}
+
+function renderLiveSignals() {
+  const box = document.getElementById('signals_live');
+  if (!box) return;
+
+  let filtered = signalFilter === 'all'
+    ? stateCache.signals
+    : stateCache.signals.filter(s => (s.status || 'open') === signalFilter);
+
+  if (liveStrategyFilter !== 'all') {
+    filtered = filtered.filter(s => getSignalStrategies(s).includes(liveStrategyFilter));
+  }
+
+  box.innerHTML = filtered.map(renderSignalCard).join('') || '<p style="color:#8e95ac">سیگنالی در این دسته نیست.</p>';
+  const countEl = document.getElementById('signal_count');
+  if (countEl) countEl.textContent = filtered.length;
+}
 
 function renderSignalCard(s) {
   const sideFa = s.side === 'long' ? '🟢 خرید (LONG)' : '🔴 فروش (SHORT)';
-  const methods = [...new Set(((s.hits || []).map(h => h.name)).filter(Boolean))];
+  const methods = [...new Set((((s && s.hits) ? s.hits : []).map(h => h && h.name)).filter(Boolean))];
   const methodFa = {
     new_listing: '🆕 تازه‌لیست', volume_spike: '🔊 حجم', orderbook_imbalance: '⚖️ اردربوک',
     liquidity_grab: '🌊 شکار', momentum_ignition: '🔥 مومنتوم', rsi_divergence: '📊 واگرایی',
@@ -254,7 +293,7 @@ function renderSignalCard(s) {
       ${tfPills ? '<div class="pills tf-pills">' + dominantPill + tfPills + '</div>' : ''}
       <div class="side ${s.side}">${sideFa}</div>
       <div class="scorebar"><div style="width:${Math.round(s.score * 100)}%"></div></div>
-      <div>امتیاز سیگنال: <b>${s.score.toFixed(2)}</b></div>
+      <div>امتیاز سیگنال: <b>${Number(s.score || 0).toFixed(2)}</b></div>
       <div class="levels">
         <div class="level">ورود<b>${fmtPrice(s.entry)}</b></div>
         <div class="level" style="color:#10b981">TP1<b>${fmtPrice(s.take_profit)}</b></div>
@@ -324,7 +363,7 @@ function renderSignalsHistoryPage() {
       <td>${fmtTime(s.created_at)}</td><td>${s.exchange}</td>
       <td>${s.base || s.symbol}${s.symbol.startsWith('DEX:') ? ' <small style="color:#f97316">DEX</small>' : ''}</td>
       <td class="${s.side}">${s.side.toUpperCase()}</td>
-      <td>${s.score.toFixed(2)}</td>
+      <td>${Number(s.score || 0).toFixed(2)}</td>
       <td>${fmtPrice(s.entry)}</td><td>${fmtPrice(s.take_profit)}</td><td>${fmtPrice(s.stop_loss)}</td>
       <td style="color:${curColor};font-weight:bold">${curPrice}</td>
       <td><span class="sig-badge-inline status-${s.status || 'open'}">${statusFaMain[s.status || 'open'] || s.status}</span></td>
@@ -1614,7 +1653,7 @@ function setScalpFilter(f) {
 
 function renderScalpSignalCard(s) {
   const sideFa = s.side === 'long' ? '🟢 خرید (LONG)' : '🔴 فروش (SHORT)';
-  const methods = [...new Set(((s.hits || []).map(h => h.name)).filter(Boolean))];
+  const methods = [...new Set((((s && s.hits) ? s.hits : []).map(h => h && h.name)).filter(Boolean))];
   const statusFa = { open: '🟢 فعال', tp: '✅ سود', sl: '❌ ضرر', trailing: '🔄 تریلینگ', closed: '⏰ بسته', no_position: '⏭️ رد شد (ظرفیت پر)' };
   const statusClass = { open: 'status-active', tp: 'status-tp', sl: 'status-sl', trailing: 'status-trailing', closed: 'status-closed' };
   const displayName = s.base || s.symbol;
@@ -1672,7 +1711,7 @@ function renderScalpSignalCard(s) {
       ${tfPills ? '<div class="pills tf-pills">' + tfPills + '</div>' : ''}
       <div class="side ${s.side}">${sideFa}</div>
       <div class="scorebar"><div style="width:${Math.round(s.score * 100)}%"></div></div>
-      <div>امتیاز: <b>${s.score.toFixed(2)}</b></div>
+      <div>امتیاز: <b>${Number(s.score || 0).toFixed(2)}</b></div>
       <div class="levels">
         <div class="level">ورود<b>${fmtPrice(s.entry)}</b></div>
         <div class="level">TP<b>${fmtPrice(s.take_profit)}</b></div>
@@ -1751,7 +1790,7 @@ function renderScalpHistory(signals) {
       <td>${fmtTime(s.entry_time || s.created_at)}</td><td>${s.exchange}</td>
       <td>${s.base || s.symbol}</td>
       <td class="${s.side}">${s.side.toUpperCase()}</td>
-      <td>${s.score.toFixed(2)}</td>
+      <td>${Number(s.score || 0).toFixed(2)}</td>
       <td>${fmtPrice(s.entry)}</td><td>${fmtPrice(s.take_profit)}</td><td>${fmtPrice(s.stop_loss)}</td>
       <td style="color:${curColor};font-weight:bold">${curPrice}</td>
       <td>${exitCell}</td>
@@ -2633,7 +2672,7 @@ function renderLitLiveList() {
       no_position: 'تحلیل این سیگنال درست بود، اما چون تعداد پوزیشن‌های باز LIT به سقف مجاز رسیده بود، معامله واقعی برایش باز نشد',
     }[status] || '';
     const time = s.created_at ? new Date(s.created_at * 1000).toLocaleString('fa-IR', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '—';
-    const score = s.score ? s.score.toFixed(2) : '—';
+    const score = s.score ? Number(s.score || 0).toFixed(2) : '—';
     const scoreColor = s.score >= 0.8 ? 'var(--success)' : s.score >= 0.7 ? 'var(--info)' : 'var(--text-muted)';
     return `<tr data-sid="${s.id}" style="cursor:pointer" onclick="showLitSignalOnChart('${s.id}')">
       <td style="font-size:11px">${time}</td>
