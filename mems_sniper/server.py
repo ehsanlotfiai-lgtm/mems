@@ -703,10 +703,11 @@ def create_app(
         sl = sum(1 for sig in signals if sig.get("status", "") in ("sl", "sl_risk_free"))
 
         # Per-setup stats from paper_trades
+        _empty = lambda: {"total": 0, "wins": 0, "losses": 0, "pnl_sum": 0.0, "trades": [], "win_rate": 0, "avg_pnl": 0}
         setup_stats = {
-            "micromap": {"total": 0, "wins": 0, "losses": 0, "pnl_sum": 0.0, "trades": [], "win_rate": 0, "avg_pnl": 0},
-            "pro_btb": {"total": 0, "wins": 0, "losses": 0, "pnl_sum": 0.0, "trades": [], "win_rate": 0, "avg_pnl": 0},
-            "sp2l": {"total": 0, "wins": 0, "losses": 0, "pnl_sum": 0.0, "trades": [], "win_rate": 0, "avg_pnl": 0},
+            "micromap": _empty(), "pro_btb": _empty(), "sp2l": _empty(),
+            "vwap": _empty(), "momentum": _empty(), "squeeze": _empty(),
+            "bb_touch": _empty(), "engulfing": _empty(), "other": _empty(),
         }
         try:
             cur = await s.db.execute(
