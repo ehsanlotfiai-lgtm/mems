@@ -387,33 +387,49 @@ class Storage:
 
 
     async def get_signal_strategy_stats(self) -> dict:
-        """Per-strategy win rates for main Signal tab (exclude SCP_ and LIT_)."""
+        """Per-strategy win rates for main Signal tab — extracted from hits_json names + rationale."""
         cur = await self.db.execute(
-            """SELECT s.id, s.hits_json, t.pnl_pct, t.close_reason
+            """SELECT s.hits_json, s.rationale, t.pnl_pct
                FROM signals s
-               LEFT JOIN paper_trades t ON t.signal_id = s.id
+               JOIN paper_trades t ON t.signal_id = s.id
                WHERE s.id NOT LIKE 'SCP_%' AND s.id NOT LIKE 'LIT_%'
                AND t.pnl_pct IS NOT NULL"""
         )
         rows = await cur.fetchall()
-        import json as _j
+        import json as _j, re as _re
         stats = {}
-        for sig_id, hits_json, pnl, reason in rows:
-            hits = _j.loads(hits_json or "[]")
-            strategies = list({h.get("strategy") or h.get("name") or "unknown" for h in hits if isinstance(h, dict)})
+        for hits_json, rationale, pnl in rows:
+            # استخراج نام استراتژی‌ها از hits_json
+            strategies = set()
+            try:
+                hits = _j.loads(hits_json or "[]")
+                for h in hits:
+                    if isinstance(h, dict):
+                        nm = h.get("name") or h.get("strategy") or ""
+                        if nm:
+                            strategies.add(nm)
+            except Exception:
+                pass
+            # fallback: از rationale استخراج کن (فرمت: "vwap, adx_trend, ...")
+            if not strategies and rationale:
+                for part in _re.split(r"[,;|
+]", rationale):
+                    token = part.strip().lower().replace(" ", "_")
+                    if token and len(token) > 2 and not token.startswith("signal") and not token.startswith("http"):
+                        strategies.add(token)
             if not strategies:
-                strategies = ["unknown"]
+                strategies = {"unknown"}
             for strat in strategies:
                 if strat not in stats:
                     stats[strat] = {"total": 0, "wins": 0, "losses": 0, "pnl_sum": 0.0}
                 stats[strat]["total"] += 1
-                if pnl and pnl > 0:
+                if pnl and float(pnl) > 0:
                     stats[strat]["wins"] += 1
-                elif pnl and pnl < 0:
+                elif pnl and float(pnl) < 0:
                     stats[strat]["losses"] += 1
                 stats[strat]["pnl_sum"] += float(pnl or 0)
         result = {}
-        for strat, st in stats.items():
+        for strat, st in sorted(stats.items(), key=lambda x: -x[1]["total"]):
             result[strat] = {
                 "total": st["total"],
                 "wins": st["wins"],
