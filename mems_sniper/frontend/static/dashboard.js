@@ -356,7 +356,9 @@ async function fetchPricesForSignals(signals) {
 /* Signal Win Rates */
 async function loadSignalWinRates() {
   try {
-    const { win_rates } = await json('/api/trades/win-rates');
+    const resp = await json('/api/trades/win-rates');
+    const win_rates = resp.win_rates;
+    const strategy_stats = resp.strategy_stats || {};
     if (!win_rates) return;
     
     const periods = [
@@ -399,6 +401,31 @@ async function loadSignalWinRates() {
       // Total all-time
       const all = win_rates.all || {};
       el24h.innerHTML = `<span style="${color(all)}">${fmt(all)}</span><br><small style="color:var(--text-muted)">${sub(all)}</small>`; 
+    }
+    // Render per-strategy win rates
+    const stratBox = document.getElementById('sig_strategy_stats');
+    if (stratBox && Object.keys(strategy_stats).length > 0) {
+      const stratNames = {
+        'confluence': '🔗 کانفلوئنس', 'momentum': '🔥 مومنتوم', 'breakout': '🚀 بریک‌اوت',
+        'reversal': '🔄 ریورسال', 'trend': '📈 ترند', 'range': '📦 رنج',
+        'volume': '📊 حجم', 'pattern': '🕯️ پترن', 'unknown': '📋 سایر',
+      };
+      stratBox.innerHTML = `
+        <div style="margin-top:16px">
+          <h4 style="margin:0 0 10px 0;font-size:13px;color:var(--text-muted)">📊 وین ریت هر استراتژی (کل)</h4>
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px">
+            ${Object.entries(strategy_stats).sort((a,b) => b[1].total - a[1].total).map(([name, st]) => {
+              const wrColor = st.win_rate >= 60 ? 'var(--success)' : st.win_rate >= 40 ? 'var(--accent)' : 'var(--danger)';
+              const pnlColor = st.avg_pnl >= 0 ? 'var(--success)' : 'var(--danger)';
+              return \`<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:10px;text-align:center">
+                <div style="font-size:11px;font-weight:bold;margin-bottom:4px">\${stratNames[name] || name}</div>
+                <div style="font-size:20px;font-weight:bold;color:\${st.total > 0 ? wrColor : 'var(--text-dim)'}">\${st.total > 0 ? st.win_rate + '%' : '—'}</div>
+                <div style="font-size:11px;color:var(--text-muted)">\${st.wins}W / \${st.losses}L (\${st.total} ترید)</div>
+                <div style="font-size:11px;color:\${pnlColor}">میانگین: \${st.avg_pnl >= 0 ? '+' : ''}\${st.avg_pnl}%</div>
+              </div>\`;
+            }).join('')}
+          </div>
+        </div>`;
     }
   } catch(e) { console.debug('Signal WR:', e); }
 }

@@ -178,7 +178,9 @@ def create_app(
     async def api_trades_win_rates() -> dict:
         s: Storage = _app_state["storage"]
         await _ensure_storage(s)
-        return {"win_rates": await s.get_time_win_rates()}
+        win_rates = await s.get_time_win_rates()
+        strategy_stats = await s.get_signal_strategy_stats()
+        return {"win_rates": win_rates, "strategy_stats": strategy_stats}
 
     @app.get("/api/market/sentiment")
     async def api_market_sentiment() -> dict:

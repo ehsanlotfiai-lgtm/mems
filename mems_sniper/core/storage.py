@@ -385,6 +385,44 @@ class Storage:
 
         return result
 
+
+    async def get_signal_strategy_stats(self) -> dict:
+        """Per-strategy win rates for main Signal tab (exclude SCP_ and LIT_)."""
+        cur = await self.db.execute(
+            """SELECT s.id, s.hits_json, t.pnl_pct, t.close_reason
+               FROM signals s
+               LEFT JOIN paper_trades t ON t.signal_id = s.id
+               WHERE s.id NOT LIKE 'SCP_%' AND s.id NOT LIKE 'LIT_%'
+               AND t.pnl_pct IS NOT NULL"""
+        )
+        rows = await cur.fetchall()
+        import json as _j
+        stats = {}
+        for sig_id, hits_json, pnl, reason in rows:
+            hits = _j.loads(hits_json or "[]")
+            strategies = list({h.get("strategy") or h.get("name") or "unknown" for h in hits if isinstance(h, dict)})
+            if not strategies:
+                strategies = ["unknown"]
+            for strat in strategies:
+                if strat not in stats:
+                    stats[strat] = {"total": 0, "wins": 0, "losses": 0, "pnl_sum": 0.0}
+                stats[strat]["total"] += 1
+                if pnl and pnl > 0:
+                    stats[strat]["wins"] += 1
+                elif pnl and pnl < 0:
+                    stats[strat]["losses"] += 1
+                stats[strat]["pnl_sum"] += float(pnl or 0)
+        result = {}
+        for strat, st in stats.items():
+            result[strat] = {
+                "total": st["total"],
+                "wins": st["wins"],
+                "losses": st["losses"],
+                "win_rate": round(st["wins"] / st["total"] * 100, 1) if st["total"] > 0 else 0,
+                "avg_pnl": round(st["pnl_sum"] / st["total"], 2) if st["total"] > 0 else 0,
+            }
+        return result
+
     # ------------------------------------------ scalping signals
     async def recent_scalp_signals(self, limit: int = 100) -> List[dict]:
         cur = await self.db.execute(
