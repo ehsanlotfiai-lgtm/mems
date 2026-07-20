@@ -2298,8 +2298,13 @@ async function loadSettings() {
     // Risk
     $('#set_risk_pct').value = st.risk_per_trade_pct || 1.0;
     $('#set_initial_balance').value = st.initial_balance || 10000;
-    $('#set_max_positions').value = st.max_positions || 8;
     $('#set_daily_loss').value = st.daily_loss_pct || 5.0;
+    $('#set_trading_hours_enabled').checked = st.trading_hours_enabled !== false;
+    $('#set_trading_hours_ranges').value = st.trading_hours_ranges || "07:00-10:00\n13:00-17:00";
+    $('#set_trading_hours_signals').checked = st.trading_hours_signals !== false;
+    $('#set_trading_hours_scalping').checked = st.trading_hours_scalping !== false;
+    $('#set_trading_hours_hunter').checked = st.trading_hours_hunter !== false;
+    $('#set_trading_hours_lit').checked = st.trading_hours_lit !== false;
     $('#set_sl_mult').value = st.sl_mult || 1.5;
     $('#set_tp_mult').value = st.tp_mult || 3.0;
     $('#set_trail_mult').value = st.trail_mult || 2.0;
@@ -2346,8 +2351,13 @@ async function saveSettings() {
     tg_chat: $('#set_tg_chat').value,
     risk_per_trade_pct: parseFloat($('#set_risk_pct').value),
     initial_balance: parseFloat($('#set_initial_balance').value),
-    max_positions: parseInt($('#set_max_positions').value),
     daily_loss_pct: parseFloat($('#set_daily_loss').value),
+    trading_hours_enabled: $('#set_trading_hours_enabled').checked,
+    trading_hours_ranges: $('#set_trading_hours_ranges').value,
+    trading_hours_signals: $('#set_trading_hours_signals').checked,
+    trading_hours_scalping: $('#set_trading_hours_scalping').checked,
+    trading_hours_hunter: $('#set_trading_hours_hunter').checked,
+    trading_hours_lit: $('#set_trading_hours_lit').checked,
     sl_mult: parseFloat($('#set_sl_mult').value),
     tp_mult: parseFloat($('#set_tp_mult').value),
     trail_mult: parseFloat($('#set_trail_mult').value),
@@ -2387,7 +2397,7 @@ async function saveSettings() {
     const el = $('#settings_status');
     if (res.ok) {
       el.className = 'settings-status success';
-      el.textContent = '✅ تنظیمات ذخیره شد! برای اعمال تغییرات، سرویس را ریستارت کنید.';
+      el.textContent = '✅ تنظیمات ذخیره و اعمال شد.';
     } else {
       el.className = 'settings-status error';
       el.textContent = '❌ خطا: ' + (res.error || 'ناشناخته');

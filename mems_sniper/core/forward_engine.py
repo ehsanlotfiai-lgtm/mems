@@ -327,6 +327,8 @@ class ForwardEngine:
         if await self.storage.has_unresolved_signal_for_symbol(symbol):
             logger.debug(f"Signal SKIPPED {symbol}: unresolved signal already pending")
             return
+        if not self._allow_new_action("signals"):
+            return
         await self.storage.save_signal(sig)
         self._signal_cooldowns[symbol] = time.time()
         logger.info(f"SIGNAL {sig.exchange} {sig.symbol} {sig.side.value} score={sig.score:.2f} -> {sig.rationale}")
@@ -466,6 +468,37 @@ class ForwardEngine:
         return
 
     # ---------------------------------------------------- meme hunter loop
+    def _trading_window_open(self, module: str) -> bool:
+        cfg = self.s.raw.get("trading_hours", {}) or {}
+        if not bool(cfg.get("enabled", True)):
+            return True
+        modules = cfg.get("modules", {}) or {}
+        if not bool(modules.get(module, True)):
+            return True
+        ranges = cfg.get("ranges_utc", ["07:00-10:00", "13:00-17:00"]) or []
+        now = time.gmtime()
+        now_minutes = now.tm_hour * 60 + now.tm_min
+        for item in ranges:
+            try:
+                start, end = str(item).strip().split("-", 1)
+                sh, sm = (int(x) for x in start.strip().split(":", 1))
+                eh, em = (int(x) for x in end.strip().split(":", 1))
+                a = sh * 60 + sm
+                b = eh * 60 + em
+                if a == b:
+                    continue
+                if (a < b and a <= now_minutes < b) or (a > b and (now_minutes >= a or now_minutes < b)):
+                    return True
+            except Exception:
+                logger.warning(f"Invalid trading-hours range ignored: {item!r}")
+        return False
+
+    def _allow_new_action(self, module: str) -> bool:
+        if self._trading_window_open(module):
+            return True
+        logger.info(f"{module} blocked by UTC trading-hours window")
+        return False
+
     async def _meme_hunter_loop(self) -> None:
         """Periodically run the 10-strategy meme hunter scan and push
         results to the dashboard."""
@@ -650,6 +683,8 @@ class ForwardEngine:
                         continue
                     if await self.storage.has_unresolved_signal_for_symbol(info.symbol):
                         continue
+                    if not self._allow_new_action("signals"):
+                        continue
 
                     await self.storage.save_signal(sig)
                     self._signal_cooldowns[info.symbol] = time.time()
@@ -784,6 +819,8 @@ class ForwardEngine:
                     if self.risk.has_open_position_for_symbol(info.symbol):
                         continue
                     if await self.storage.has_unresolved_signal_for_symbol(info.symbol, like_prefix="SCP_%"):
+                        continue
+                    if not self._allow_new_action("scalping"):
                         continue
 
                     await self.storage.save_signal(sig)
@@ -1039,6 +1076,8 @@ class ForwardEngine:
             if risk.has_open_position_for_symbol(signal.symbol):
                 return
             if await storage.has_unresolved_signal_for_symbol(signal.symbol, like_prefix="LIT_%"):
+                return
+            if not self._allow_new_action("lit"):
                 return
 
             entry = signal.entry

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from typing import Dict, List, Optional
 
@@ -352,8 +353,13 @@ def create_app(
             "tg_chat": s.telegram_chat_id or "",
             "risk_per_trade_pct": risk.get("risk_per_trade_pct", 1.0),
             "initial_balance": risk.get("initial_paper_balance", 10000),
-            "max_positions": risk.get("max_open_positions", 8),
             "daily_loss_pct": risk.get("daily_max_loss_pct", 5.0),
+            "trading_hours_enabled": (s.raw.get("trading_hours", {}) or {}).get("enabled", True),
+            "trading_hours_ranges": "\n".join((s.raw.get("trading_hours", {}) or {}).get("ranges_utc", ["07:00-10:00", "13:00-17:00"])),
+            "trading_hours_signals": ((s.raw.get("trading_hours", {}) or {}).get("modules", {}) or {}).get("signals", True),
+            "trading_hours_scalping": ((s.raw.get("trading_hours", {}) or {}).get("modules", {}) or {}).get("scalping", True),
+            "trading_hours_hunter": ((s.raw.get("trading_hours", {}) or {}).get("modules", {}) or {}).get("hunter", True),
+            "trading_hours_lit": ((s.raw.get("trading_hours", {}) or {}).get("modules", {}) or {}).get("lit", True),
             "sl_mult": risk.get("stop_loss_atr_mult", 1.5),
             "tp_mult": risk.get("take_profit_atr_mult", 3.0),
             "trail_mult": risk.get("trailing_activate_atr_mult", 2.0),
@@ -435,8 +441,25 @@ def create_app(
             cfg.setdefault("risk", {})
             cfg["risk"]["risk_per_trade_pct"] = payload.get("risk_per_trade_pct", 1.0)
             cfg["risk"]["initial_paper_balance"] = payload.get("initial_balance", 10000)
-            cfg["risk"]["max_open_positions"] = payload.get("max_positions", 8)
+            cfg["risk"].pop("max_open_positions", None)
             cfg["risk"]["daily_max_loss_pct"] = payload.get("daily_loss_pct", 5.0)
+
+            raw_ranges = str(payload.get("trading_hours_ranges", "")).replace(",", "\n").splitlines()
+            ranges = [x.strip() for x in raw_ranges if x.strip()] or ["07:00-10:00", "13:00-17:00"]
+            for item in ranges:
+                if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d-(?:[01]\d|2[0-3]):[0-5]\d", item):
+                    raise ValueError(f"Invalid UTC trading-hours range: {item}")
+            cfg["trading_hours"] = {
+                "enabled": bool(payload.get("trading_hours_enabled", True)),
+                "timezone": "UTC",
+                "ranges_utc": ranges,
+                "modules": {
+                    "signals": bool(payload.get("trading_hours_signals", True)),
+                    "scalping": bool(payload.get("trading_hours_scalping", True)),
+                    "hunter": bool(payload.get("trading_hours_hunter", True)),
+                    "lit": bool(payload.get("trading_hours_lit", True)),
+                },
+            }
             cfg["risk"]["stop_loss_atr_mult"] = payload.get("sl_mult", 1.5)
             cfg["risk"]["take_profit_atr_mult"] = payload.get("tp_mult", 3.0)
             cfg["risk"]["trailing_activate_atr_mult"] = payload.get("trail_mult", 2.0)
@@ -488,12 +511,11 @@ def create_app(
             if live_risk is not None:
                 live_risk.s = new_settings
                 live_risk.risk = new_settings.risk
-                live_risk.max_open = int(cfg["risk"]["max_open_positions"])
                 live_risk.daily_loss_limit_pct = float(cfg["risk"]["daily_max_loss_pct"])
                 logger.info(
                     f"Settings saved — live RiskEngine updated: "
-                    f"max_open_positions={live_risk.max_open}, "
-                    f"daily_max_loss_pct={live_risk.daily_loss_limit_pct}"
+                    f"daily_max_loss_pct={live_risk.daily_loss_limit_pct}, "
+                    f"trading_hours={cfg['trading_hours']}"
                 )
             # The ForwardEngine (main/scalp/LIT loops) also holds its OWN
             # fixed reference to the old Settings object (self.s), read
