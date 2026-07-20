@@ -33,7 +33,6 @@ class RiskEngine:
         self.today = time.gmtime().tm_yday
         self.open_positions: Dict[str, PaperPosition] = {}    # by position id
         self.realized_pnl_today: float = 0.0
-        self.max_open = int(self.risk.get("max_open_positions", 4))
         self.daily_loss_limit_pct = float(self.risk.get("daily_max_loss_pct", 5.0))
         self.max_position_age = int(self.risk.get("max_position_age_seconds", 3600))
         # Minimum seconds a position must be open before SL/TP is even
