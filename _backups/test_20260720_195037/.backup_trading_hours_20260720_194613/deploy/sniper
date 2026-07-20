@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# ============================================================
+#  sniper — ابزار مدیریت MemeCoin Sniper
+#
+#  Usage:
+#    sniper status    — وضعیت سرویس
+#    sniper logs      — لاگ زنده
+#    sniper restart   — ریستارت
+#    sniper stop      — توقف
+#    sniper start     — شروع
+#    sniper edit      — ویرایش .env
+#    sniper test      — تست اتصال صرافی
+#    sniper backtest  — اجرای بک‌تست
+# ============================================================
+
+set -euo pipefail
+
+APP_NAME="memecoin-sniper"
+APP_DIR="/root/mems_sniper"
+VENV_DIR="${APP_DIR}/venv"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+case "${1:-help}" in
+    status)
+        systemctl status "${APP_NAME}" --no-pager
+        ;;
+    logs|log)
+        journalctl -u "${APP_NAME}" -f --no-pager
+        ;;
+    logs-recent)
+        journalctl -u "${APP_NAME}" --since "${2:-1h}" --no-pager
+        ;;
+    restart)
+        sudo systemctl restart "${APP_NAME}"
+        echo -e "${GREEN}✅ سرویس ریستارت شد${NC}"
+        ;;
+    stop)
+        sudo systemctl stop "${APP_NAME}"
+        echo -e "${RED}⏹️  سرویس متوقف شد${NC}"
+        ;;
+    start)
+        sudo systemctl start "${APP_NAME}"
+        echo -e "${GREEN}▶️  سرویس شروع شد${NC}"
+        ;;
+    edit)
+        sudo nano "${APP_DIR}/.env"
+        echo -e "${CYAN}💡 برای اعمال تغییرات: sniper restart${NC}"
+        ;;
+    test)
+        echo -e "${CYAN}تست اتصال صرافی‌ها...${NC}"
+        "${VENV_DIR}/bin/python" -c "
+import asyncio, ccxt.async_support as ccxt
+
+async def test():
+    for name in ['binance', 'bybit']:
+        try:
+            ex = getattr(ccxt, name)({'enableRateLimit': True})
+            await ex.load_markets()
+            print(f'  ✅ {name}: {len(ex.markets)} بازار')
+            await ex.close()
+        except Exception as e:
+            print(f'  ❌ {name}: {e}')
+
+asyncio.run(test())
+"
+        echo -e "${CYAN}تست DEX API...${NC}"
+        "${VENV_DIR}/bin/python" -c "
+import asyncio, httpx
+
+async def test():
+    async with httpx.AsyncClient(timeout=10) as c:
+        r = await c.get('https://api.dexscreener.com/tokens/v1/solana/DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263')
+        print(f'  ✅ DexScreener: {r.status_code}')
+        r2 = await c.get('https://frontend-api-v3.pump.fun/coins?limit=1')
+        print(f'  ✅ Pump.fun: {r2.status_code}')
+
+asyncio.run(test())
+"
+        echo -e "${GREEN}تست تمام شد ✅${NC}"
+        ;;
+    backtest)
+        shift
+        "${VENV_DIR}/bin/python" -m scripts.run_backtest "$@"
+        ;;
+    help|--help|-h)
+        echo ""
+        echo "  🎯 MemeCoin Sniper — دستورات مدیریتی"
+        echo ""
+        echo "  sniper status       وضعیت سرویس"
+        echo "  sniper logs         لاگ زنده (Ctrl+C برای خروج)"
+        echo "  sniper logs-recent  لاگ اخیر (پیش‌فرض: 1 ساعت)"
+        echo "  sniper restart      ریستارت سرویس"
+        echo "  sniper stop         توقف سرویس"
+        echo "  sniper start        شروع سرویس"
+        echo "  sniper edit         ویرایش فایل .env"
+        echo "  sniper test         تست اتصال صرافی‌ها"
+        echo "  sniper backtest     اجرای بک‌تست"
+        echo ""
+        ;;
+    *)
+        echo -e "${RED}دستور ناشناخته: $1${NC}"
+        echo "  sniper help برای لیست دستورات"
+        exit 1
+        ;;
+esac

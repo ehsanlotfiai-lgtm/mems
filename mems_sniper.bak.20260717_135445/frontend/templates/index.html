@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🎯 MemeCoin Sniper - داشبورد</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+  <div class="app">
+    <!-- HEADER -->
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">🎯</span>
+        <div>
+          <h1>MemeCoin Sniper</h1>
+          <p>شکارچی پامپ میم‌کوین چند-تایم‌فریمی</p>
+        </div>
+      </div>
+      <div class="status-row">
+        <div class="card stat-card">
+          <span class="card-label">موجودی کاغذی</span>
+          <span id="equity" class="card-value">—</span>
+        </div>
+        <div class="card stat-card">
+          <span class="card-label">پوزیشن‌های باز</span>
+          <span id="open_count" class="card-value">—</span>
+        </div>
+        <div class="card stat-card">
+          <span class="card-label">سود/ضرر روزانه</span>
+          <span id="daily_pnl" class="card-value">—</span>
+        </div>
+        <div class="card stat-card">
+          <span class="card-label">وضعیت اتصال</span>
+          <span id="ws_status" class="card-value dot">🔗</span>
+        </div>
+        <div class="card stat-card">
+          <span class="card-label">📊 روند بازار</span>
+          <span id="market_sentiment" class="card-value">—</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- NAV TABS -->
+    <nav class="tabs">
+      <button class="tab-btn active" data-tab="signals">📡 سیگنال‌ها</button>
+      <button class="tab-btn" data-tab="scalping">⚡ اسکلپ</button>
+      <button class="tab-btn" data-tab="lit">🧠 LIT</button>
+      <button class="tab-btn" data-tab="hunter">🎯 شکارچی میم‌کوین</button>
+      <button class="tab-btn" data-tab="success">📊 درصد موفقیت</button>
+      <button class="tab-btn" data-tab="positions">📂 پوزیشن‌ها</button>
+      <button class="tab-btn" data-tab="chart">📈 نمودار</button>
+      <button class="tab-btn" data-tab="backtest">🧪 بک‌تست</button>
+      <button class="tab-btn" data-tab="universe">👁️ واچ‌لیست</button>
+      <button class="tab-btn" data-tab="assistant">🤖 دستیار</button>
+      <button class="tab-btn" data-tab="help">❓ راهنما</button>
+      <button class="tab-btn" data-tab="settings">⚙️ تنظیمات</button>
+    </nav>
+
+    <!-- CONTENT -->
+    <main class="content">
+
+      <!-- SIGNALS TAB -->
+      <section id="tab-signals" class="tab-panel active">
+        <div class="panel-header">
+          <h2>📡 سیگنال‌های زنده</h2>
+          <div>
+            <span id="signal_count" class="badge">0</span>
+            <button class="btn btn-reset" onclick="resetSection('signals')" title="پاک کردن تاریخچه سیگنال‌ها">🗑️ ریست</button>
+          </div>
+        </div>
+        <div class="filter-bar">
+          <button class="btn sig-filter-btn active" data-filter="all" onclick="setSignalFilter('all')">همه</button>
+          <button class="btn sig-filter-btn" data-filter="open" onclick="setSignalFilter('open')">🟢 فعال</button>
+          <button class="btn sig-filter-btn" data-filter="tp" onclick="setSignalFilter('tp')">✅ سود</button>
+          <button class="btn sig-filter-btn" data-filter="sl" onclick="setSignalFilter('sl')">❌ ضرر</button>
+          <button class="btn sig-filter-btn" data-filter="trailing" onclick="setSignalFilter('trailing')">🔄 تریلینگ</button>
+          <button class="btn sig-filter-btn" data-filter="closed" onclick="setSignalFilter('closed')">⏰ بسته</button>
+        </div>
+        <div id="signals_live" class="signal-grid"></div>
+        <h3>تاریخچه سیگنال‌ها</h3>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>زمان</th><th>صرافی</th><th>نماد</th><th>سمت</th><th>امتیاز</th>
+                <th>ورود</th><th>TP</th><th>SL</th><th>وضعیت</th><th>روش‌ها</th>
+              </tr>
+            </thead>
+            <tbody id="signals_history"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- SCALPING TAB — اسکلپ روی ارزهای پرحجم -->
+      <section id="tab-scalping" class="tab-panel">
+        <div class="panel-header">
+          <h2>⚡ اسکلپ — سیگنال‌های سریع روی ارزهای پرحجم</h2>
+          <div>
+            <span id="scalp_count" class="badge">0</span>
+            <button class="btn btn-secondary" onclick="testScalping()" style="margin-right:8px;font-size:12px;padding:4px 12px">🔍 تست</button>
+            <button class="btn btn-reset" onclick="resetSection('scalping')" title="پاک کردن سیگنال‌های اسکلپ">🗑️ ریست</button>
+          </div>
+        </div>
+
+        <!-- Win Rate Cards -->
+        <div id="scalp_win_rates" class="pos-winrate-grid"></div>
+
+        <!-- Stats Summary -->
+        <div id="scalp_stats" class="hunter-summary"></div>
+
+        <!-- Filter -->
+        <div class="filter-bar">
+          <button class="btn scalp-filter-btn active" data-filter="all" onclick="setScalpFilter('all')">⚡ همه</button>
+          <button class="btn scalp-filter-btn" data-filter="open" onclick="setScalpFilter('open')">🟢 فعال</button>
+          <button class="btn scalp-filter-btn" data-filter="tp" onclick="setScalpFilter('tp')">✅ سود</button>
+          <button class="btn scalp-filter-btn" data-filter="sl" onclick="setScalpFilter('sl')">❌ ضرر</button>
+        </div>
+
+        <!-- Live Scalp Signals -->
+        <div id="scalp_signals_live" class="signal-grid"></div>
+
+        <!-- History Table -->
+        <h3>تاریخچه سیگنال‌های اسکلپ</h3>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>زمان</th><th>صرافی</th><th>نماد</th><th>سمت</th><th>امتیاز</th>
+                <th>ورود</th><th>TP</th><th>SL</th><th>وضعیت</th><th>روش‌ها</th>
+              </tr>
+            </thead>
+            <tbody id="scalp_history"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════════════ -->
+      <!-- LIT TAB — استراتژی Liquidity Inducement Theorem -->
+      <!-- ═══════════════════════════════════════════════════════════════════ -->
+      <section id="tab-lit" class="tab-panel">
+        <div class="panel-header">
+          <h2>🧠 LIT — استراتژی نقدینگی (Liquidity Inducement Theorem)</h2>
+          <div>
+            <button class="btn btn-secondary" onclick="loadLitSignals()">🔄 بروزرسانی لایو</button>
+            <button class="btn btn-secondary" onclick="litClearAll()">🧹 پاک‌سازی</button>
+          </div>
+        </div>
+
+        <!-- ═══ تب‌های فرعی ═══ -->
+        <div style="display:flex;gap:6px;margin-bottom:14px;border-bottom:1px solid rgba(255,255,255,0.1);padding-bottom:0">
+          <button class="btn lit-subtab-btn active" data-lit-subtab="live" onclick="litSwitchSubtab('live')" style="border-radius:8px 8px 0 0;border-bottom:2px solid var(--accent)">📡 سیگنال‌های لایو (۳ روز)</button>
+          <button class="btn lit-subtab-btn" data-lit-subtab="backtest" onclick="litSwitchSubtab('backtest')" style="border-radius:8px 8px 0 0;border-bottom:2px solid transparent">🧪 بک‌تست</button>
+          <button class="btn lit-subtab-btn" data-lit-subtab="edu" onclick="litSwitchSubtab('edu')" style="border-radius:8px 8px 0 0;border-bottom:2px solid transparent">📚 آموزش</button>
+        </div>
+
+        <!-- ═══ بخش لایو ═══ -->
+        <div id="lit_sub_live" class="lit-subtab-panel">
+          <!-- خلاصه -->
+          <div class="metrics-grid" style="margin-bottom:12px" id="lit_live_metrics">
+            <div class="metric-card"><div class="metric-value" id="lit_live_count">—</div><div class="metric-label">📊 کل سیگنال‌ها</div></div>
+            <div class="metric-card"><div class="metric-value" id="lit_live_long">—</div><div class="metric-label">🟢 لانگ</div></div>
+            <div class="metric-card"><div class="metric-value" id="lit_live_short">—</div><div class="metric-label">🔴 شورت</div></div>
+            <div class="metric-card"><div class="metric-value" id="lit_live_symbols">—</div><div class="metric-label">🪙 نمادهای مختلف</div></div>
+            <div class="metric-card"><div class="metric-value" id="lit_live_best">—</div><div class="metric-label">⭐ بهترین امتیاز</div></div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 400px;gap:12px">
+            <!-- لیست سیگنال‌ها -->
+            <div>
+              <div class="settings-card" style="padding:8px;margin-bottom:10px">
+                <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px">
+                  <h3 style="margin:0">📡 سیگنال‌های لایو — ۳ روز اخیر</h3>
+                  <select id="lit_live_filter" class="input" style="width:auto;height:32px;font-size:12px" onchange="renderLitLiveList()">
+                    <option value="all">همه</option>
+                    <option value="long">فقط لانگ</option>
+                    <option value="short">فقط شورت</option>
+                  </select>
+                </div>
+                <div style="overflow-x:auto;max-height:500px;overflow-y:auto">
+                  <table class="table" style="font-size:12px">
+                    <thead style="position:sticky;top:0;background:#161b22;z-index:1">
+                      <tr>
+                        <th>زمان</th><th>نماد</th><th>سمت</th><th>استراتژی</th>
+                        <th>ورود</th><th>TP</th><th>SL</th><th>امتیاز</th><th>وضعیت</th>
+                      </tr>
+                    </thead>
+                    <tbody id="lit_live_signals">
+                      <tr><td colspan="9" style="text-align:center;color:var(--text-muted)">در حال بارگذاری...</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <!-- نمودار + جزئیات -->
+            <div>
+              <div class="settings-card" style="padding:6px;margin-bottom:10px">
+                <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px">
+                  <span style="font-weight:bold;font-size:13px" id="lit_live_chart_title">📈 روی یک سیگنال کلیک کنید</span>
+                </div>
+                <div id="lit_live_chart_container" style="height:350px"></div>
+              </div>
+              <div class="settings-card" style="position:sticky;top:60px;max-height:400px;overflow-y:auto;padding:12px">
+                <div id="lit_live_detail">
+                  <p style="color:var(--text-muted);font-size:13px;line-height:1.8;text-align:center;padding:20px 0">
+                    روی هر سیگنال کلیک کنید تا نمودار و تحلیل کامل نمایش داده شود
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══ بخش بک‌تست ═══ -->
+        <div id="lit_sub_backtest" class="lit-subtab-panel" style="display:none">
+          <div class="settings-card" style="margin-bottom:12px;padding:12px">
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+              <div class="form-group" style="flex:1;min-width:140px">
+                <label>نماد</label>
+                <select id="lit_bt_symbol" class="input">
+                  <option value="BTC/USDT">BTC/USDT</option>
+                  <option value="ETH/USDT">ETH/USDT</option>
+                  <option value="SOL/USDT">SOL/USDT</option>
+                  <option value="BNB/USDT">BNB/USDT</option>
+                  <option value="XRP/USDT">XRP/USDT</option>
+                  <option value="DOGE/USDT">DOGE/USDT</option>
+                  <option value="ADA/USDT">ADA/USDT</option>
+                  <option value="AVAX/USDT">AVAX/USDT</option>
+                  <option value="LINK/USDT">LINK/USDT</option>
+                </select>
+              </div>
+              <div class="form-group" style="min-width:120px">
+                <label>تایم‌فریم</label>
+                <select id="lit_bt_tf" class="input">
+                  <option value="15m">۱۵ دقیقه</option>
+                  <option value="1h" selected>۱ ساعته</option>
+                  <option value="4h">۴ ساعته</option>
+                  <option value="1d">روزانه</option>
+                </select>
+              </div>
+              <div class="form-group" style="min-width:100px">
+                <label>تعداد کندل</label>
+                <input type="number" id="lit_bt_limit" class="input" value="500" min="100" max="2000" step="100">
+              </div>
+              <button class="btn btn-primary" id="lit_bt_run" onclick="runLitBacktest()" style="height:42px">▶️ اجرای بک‌تست</button>
+            </div>
+          </div>
+
+          <div id="lit_bt_loading" style="display:none;text-align:center;padding:40px">
+            <div style="font-size:24px;animation:pulse 1.5s infinite">⏳</div>
+            <p style="color:var(--text-muted);margin-top:8px">در حال بک‌تست... لطفاً صبر کنید</p>
+          </div>
+
+          <div id="lit_bt_stats" style="display:none">
+            <div class="metrics-grid">
+              <div class="metric-card"><div class="metric-value" id="lit_stat_wr">—</div><div class="metric-label">📊 Win Rate</div></div>
+              <div class="metric-card"><div class="metric-value" id="lit_stat_total">—</div><div class="metric-label">📈 کل تریدها</div></div>
+              <div class="metric-card"><div class="metric-value" id="lit_stat_pnl">—</div><div class="metric-label">💰 سود/ضرر کل</div></div>
+              <div class="metric-card"><div class="metric-value" id="lit_stat_avg_r">—</div><div class="metric-label">⚖️ میانگین R</div></div>
+              <div class="metric-card"><div class="metric-value" id="lit_stat_best">—</div><div class="metric-label">🚀 بهترین</div></div>
+              <div class="metric-card"><div class="metric-value" id="lit_stat_worst">—</div><div class="metric-label">⚠️ بدترین</div></div>
+            </div>
+            <div class="settings-card" style="margin-top:12px">
+              <h3>📊 عملکرد هر استراتژی</h3>
+              <div id="lit_strategy_stats" style="overflow-x:auto"></div>
+            </div>
+          </div>
+
+          <div id="lit_bt_chart_section" style="display:none;margin-top:12px">
+            <div style="display:grid;grid-template-columns:1fr 400px;gap:12px">
+              <div>
+                <div class="settings-card" style="padding:6px">
+                  <div style="padding:4px 8px">
+                    <span style="font-weight:bold" id="lit_chart_title">📈 نمودار بک‌تست</span>
+                  </div>
+                  <div id="lit_chart_container" style="height:420px"></div>
+                </div>
+                <div class="settings-card" style="margin-top:12px;padding:8px">
+                  <h3 style="margin-bottom:6px">📋 لیست تریدها</h3>
+                  <div style="overflow-x:auto;max-height:300px;overflow-y:auto">
+                    <table class="table" style="font-size:12px">
+                      <thead style="position:sticky;top:0;background:#161b22;z-index:1">
+                        <tr>
+                          <th>#</th><th>سمت</th><th>استراتژی</th>
+                          <th>زمان ورود</th><th>ورود</th>
+                          <th>زمان خروج</th><th>خروج</th>
+                          <th>SL</th><th>سود%</th><th>R</th><th>خروج</th>
+                        </tr>
+                      </thead>
+                      <tbody id="lit_bt_trades"></tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+              <div>
+                <div class="settings-card" style="position:sticky;top:60px;max-height:calc(100vh - 120px);overflow-y:auto">
+                  <h3 id="lit_edu_title">📚 روی یک ترید کلیک کنید</h3>
+                  <div id="lit_edu_content" style="margin-top:10px">
+                    <p style="color:var(--text-muted);font-size:13px;line-height:2">
+                      روی هر ردیف کلیک کنید تا نمودار و تحلیل کامل نمایش داده شود.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══ بخش آموزش ═══ -->
+        <div id="lit_sub_edu" class="lit-subtab-panel" style="display:none">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px" id="lit_edu_cards"></div>
+        </div>
+      </section>
+
+      <!-- HUNTER TAB — شکارچی میم‌کوین -->
+      <section id="tab-hunter" class="tab-panel">
+        <div class="panel-header">
+          <h2>🎯 شکارچی میم‌کوین — ۱۰ استراتژی</h2>
+          <div>
+            <span id="hunter_total" class="badge">0</span>
+            <button class="btn btn-secondary" onclick="testHunterAPIs()" style="margin-right:8px;font-size:12px;padding:4px 12px">🔍 تست API</button>
+            <button class="btn btn-reset" onclick="resetSection('hunter')" title="ریست و اسکن مجدد شکارچی">🗑️ ریست</button>
+          </div>
+        </div>
+
+        <!-- Daily Top Picks — انتخاب‌های ویژه روز -->
+        <div id="daily_picks_section" class="daily-picks-section">
+          <h3>⭐ انتخاب‌های ویژه امروز <small style="color:#8e95ac;font-weight:normal">(۴-۵ توکن با احتمال بالا)</small></h3>
+          <div id="daily_picks" class="daily-picks-grid"></div>
+        </div>
+
+        <!-- Summary Cards -->
+        <div id="hunter_summary" class="hunter-summary"></div>
+
+        <!-- Strategy Filter -->
+        <div class="filter-bar">
+          <button class="btn hunter-filter-btn active" data-filter="all" onclick="setHunterFilter('all')">🎯 همه</button>
+          <button class="btn hunter-filter-btn" data-filter="pre_pump" onclick="setHunterFilter('pre_pump')">💥 قبل از پامپ</button>
+          <button class="btn hunter-filter-btn" data-filter="post_migration" onclick="setHunterFilter('post_migration')">🚀 بعد از Migration</button>
+          <button class="btn hunter-filter-btn" data-filter="narrative" onclick="setHunterFilter('narrative')">📖 روایت‌ها</button>
+          <button class="btn hunter-filter-btn" data-filter="contract_safety" onclick="setHunterFilter('contract_safety')">🔒 امنیت قرارداد</button>
+          <button class="btn hunter-filter-btn" data-filter="whale_activity" onclick="setHunterFilter('whale_activity')">🐋 نهنگ‌ها</button>
+          <button class="btn hunter-filter-btn" data-filter="liquidity_health" onclick="setHunterFilter('liquidity_health')">💧 نقدینگی</button>
+          <button class="btn hunter-filter-btn" data-filter="holder_distribution" onclick="setHunterFilter('holder_distribution')">👥 هولدرها</button>
+          <button class="btn hunter-filter-btn" data-filter="volume_profile" onclick="setHunterFilter('volume_profile')">📊 حجم</button>
+          <button class="btn hunter-filter-btn" data-filter="momentum_breakout" onclick="setHunterFilter('momentum_breakout')">🚀 بریک‌اوت</button>
+        </div>
+
+        <!-- Live Hunter Results -->
+        <div id="hunter_results" class="signal-grid"></div>
+
+        <!-- Strategy Details -->
+        <div class="hunter-details-grid">
+          <div class="hunter-strat-card" id="hunter_strat_pre_pump">
+            <h3>💥 شکار قبل از پامپ</h3>
+            <p class="hunter-strat-desc">توکن‌های تازه launch شده با سن کمتر از ۳۰ دقیقه، حجم رشد‌یافته، و ورود Smart Money</p>
+            <div id="hunter_pre_pump_list" class="hunter-token-list"></div>
+          </div>
+          <div class="hunter-strat-card" id="hunter_strat_post_migration">
+            <h3>🚀 بعد از Migration</h3>
+            <p class="hunter-strat-desc">توکن‌هایی که از bonding curve پامپ‌فان به DEX منتقل شده‌اند و حجم خرید بالایی دارند</p>
+            <div id="hunter_post_migration_list" class="hunter-token-list"></div>
+          </div>
+          <div class="hunter-strat-card" id="hunter_strat_narrative">
+            <h3>📖 روایت‌ها</h3>
+            <p class="hunter-strat-desc">میم‌کوین‌هایی که با ترندهای روز (AI، Trump، Grok، PEPE، ...) همسو هستند</p>
+            <div id="hunter_narrative_list" class="hunter-token-list"></div>
+          </div>
+          <div class="hunter-strat-card" id="hunter_strat_contract_safety">
+            <h3>🔒 امنیت قرارداد</h3>
+            <p class="hunter-strat-desc">بررسی امنیتی قرارداد: Proxy، Mint/Freeze authority، Bundle، تمرکز هولدرها</p>
+            <div id="hunter_contract_safety_list" class="hunter-token-list"></div>
+          </div>
+          <div class="hunter-strat-card" id="hunter_strat_whale_activity">
+            <h3>🐋 فعالیت نهنگ‌ها</h3>
+            <p class="hunter-strat-desc">شناسایی خریدهای بزرگ، نسبت حجم/تراکنش بالا، و ورود Smart Money</p>
+            <div id="hunter_whale_activity_list" class="hunter-token-list"></div>
+          </div>
+          <div class="hunter-strat-card" id="hunter_strat_liquidity_health">
+            <h3>💧 سلامت نقدینگی</h3>
+            <p class="hunter-strat-desc">تحلیل عمق نقدینگی، نسبت MC/Liq، قفل نقدینگی، و نسبت حجم به نقدینگی</p>
+            <div id="hunter_liquidity_health_list" class="hunter-token-list"></div>
+          </div>
+          <div class="hunter-strat-card" id="hunter_strat_holder_distribution">
+            <h3>👥 توزیع هولدرها</h3>
+            <p class="hunter-strat-desc">بررسی تمرکز هولدرها، کیف پول dev، و پراکندگی دارایی</p>
+            <div id="hunter_holder_distribution_list" class="hunter-token-list"></div>
+          </div>
+          <div class="hunter-strat-card" id="hunter_strat_volume_profile">
+            <h3>📊 پروفایل حجم</h3>
+            <p class="hunter-strat-desc">تشخیص volume spike، الگوی انباشت، و تأیید بریک‌اوت با حجم</p>
+            <div id="hunter_volume_profile_list" class="hunter-token-list"></div>
+          </div>
+          <div class="hunter-strat-card" id="hunter_strat_momentum_breakout">
+            <h3>🚀 بریک‌اوت مومنتوم</h3>
+            <p class="hunter-strat-desc">رشد همزمان در تمام تایم‌فریم‌ها، شتاب مومنتوم، و تأیید حجمی</p>
+            <div id="hunter_momentum_breakout_list" class="hunter-token-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SUCCESS RATE TAB — درصد موفقیت -->
+      <section id="tab-success" class="tab-panel">
+        <div class="panel-header">
+          <h2>📊 درصد موفقیت شکارچی</h2>
+          <div>
+            <button class="btn btn-reset" onclick="resetSection('success')" title="پاک کردن آمار موفقیت">🗑️ ریست</button>
+          </div>
+        </div>
+
+        <!-- Score Filter — فیلتر بر اساس امتیاز -->
+        <div class="score-filter-bar">
+          <label>فیلتر امتیاز:</label>
+          <button class="btn score-filter-btn active" data-min="0" data-max="1" onclick="setScoreFilter(0, 1, this)">همه</button>
+          <button class="btn score-filter-btn" data-min="0.3" data-max="1" onclick="setScoreFilter(0.3, 1, this)">≥ ۳۰%</button>
+          <button class="btn score-filter-btn" data-min="0.5" data-max="1" onclick="setScoreFilter(0.5, 1, this)">≥ ۵۰%</button>
+          <button class="btn score-filter-btn" data-min="0.7" data-max="1" onclick="setScoreFilter(0.7, 1, this)">≥ ۷۰%</button>
+          <button class="btn score-filter-btn" data-min="0.8" data-max="1" onclick="setScoreFilter(0.8, 1, this)">≥ ۸۰%</button>
+          <button class="btn score-filter-btn" data-min="0.9" data-max="1" onclick="setScoreFilter(0.9, 1, this)">≥ ۹۰%</button>
+        </div>
+
+        <!-- Overall stats -->
+        <div id="success_overall" class="hunter-summary-cards"></div>
+
+        <!-- Per-strategy breakdown -->
+        <div id="success_by_strategy" class="success-strat-grid"></div>
+
+        <!-- Recent detections table -->
+        <h3>🔬 آخرین شناسایی‌ها و نتایج</h3>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>زمان شناسایی</th><th>نماد</th><th>استراتژی</th>
+                <th>امتیاز</th><th>قیمت شناسایی</th>
+                <th>قیمت ۵ دقیقه</th><th>قیمت ۳۰ دقیقه</th>
+                <th>قیمت ۱ ساعت</th><th>ROI اوج</th><th>نتیجه</th>
+              </tr>
+            </thead>
+            <tbody id="success_detections"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- POSITIONS TAB -->
+      <section id="tab-positions" class="tab-panel">
+        <div class="panel-header">
+          <h2>📂 پوزیشن‌ها</h2>
+          <div>
+            <button class="btn btn-reset" onclick="resetSection('positions')" title="بستن همه پوزیشن‌ها و ریست موجودی">🗑️ ریست پوزیشن‌ها</button>
+            <button class="btn btn-reset" onclick="resetSection('trades')" title="پاک کردن کل تاریخچه تریدها">🗑️ ریست کامل</button>
+          </div>
+        </div>
+
+        <!-- Win Rate Cards — آمار زمانی -->
+        <div id="pos_win_rates" class="pos-winrate-grid"></div>
+
+        <div class="filter-bar">
+          <button class="btn pos-filter-btn active" data-filter="all" onclick="setPosFilter('all')">همه</button>
+          <button class="btn pos-filter-btn" data-filter="open" onclick="setPosFilter('open')">🟢 باز</button>
+          <button class="btn pos-filter-btn" data-filter="closed" onclick="setPosFilter('closed')">🔒 بسته</button>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>زمان ورود</th><th>نماد</th><th>سمت</th><th>نوع</th><th>اهرم</th>
+                <th>ورود</th><th>قیمت لایو/خروج</th><th>TP1/TP2/TP3</th><th>SL</th>
+                <th>زمان خروج</th><th>مدت</th>
+                <th>حجم</th><th>PnL</th>
+              </tr>
+            </thead>
+            <tbody id="trades_table"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- CHART TAB -->
+      <section id="tab-chart" class="tab-panel">
+        <h2>📈 نمودار زنده</h2>
+        <div class="chart-controls">
+          <select id="chart_exchange" class="input">
+            <option value="binance">Binance</option>
+            <option value="bybit">Bybit</option>
+          </select>
+          <input type="text" id="chart_symbol" class="input" value="DOGE/USDT" placeholder="DOGE/USDT">
+          <select id="chart_tf" class="input">
+            <option value="1m">1m</option>
+            <option value="5m" selected>5m</option>
+            <option value="15m">15m</option>
+            <option value="1h">1h</option>
+          </select>
+          <button id="chart_load" class="btn">بارگذاری</button>
+          <button id="chart_live" class="btn btn-secondary">🔴 زنده</button>
+        </div>
+        <!-- Signal Info Overlay — روی نمودار -->
+        <div id="chart_signal_overlay" class="chart-signal-overlay hidden">
+          <div id="csd_header" class="csd-header"></div>
+          <div id="csd_strategies" class="csd-strategies"></div>
+        </div>
+        <div id="price_chart" class="chart-container"></div>
+
+        <!-- Signal Analysis Panel -->
+        <div id="signal_analysis_panel" class="signal-analysis-panel hidden">
+          <div class="signal-analysis-header">
+            <h3 id="sa_title">🔍 تحلیل سیگنال</h3>
+            <button class="btn btn-secondary" onclick="closeSignalAnalysis()" style="font-size:12px;padding:4px 10px">✖ بستن</button>
+          </div>
+          <div id="sa_content"></div>
+        </div>
+      </section>
+
+      <!-- BACKTEST TAB -->
+      <section id="tab-backtest" class="tab-panel">
+        <h2>🧪 بک‌تست تک-نمادی</h2>
+        <div class="chart-controls">
+          <select id="bt_exchange" class="input">
+            <option value="binance">Binance</option>
+            <option value="bybit">Bybit</option>
+          </select>
+          <input type="text" id="bt_symbol" class="input" value="PEPE/USDT" placeholder="PEPE/USDT">
+          <button id="bt_run" class="btn">اجرا</button>
+        </div>
+        <div id="bt_summary" class="metrics-grid"></div>
+        <canvas id="equity_chart" height="280"></canvas>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr><th>زمان باز</th><th>سمت</th><th>ورود</th><th>خروج</th><th>PnL USDT</th><th>PnL %</th><th>دلیل</th></tr>
+            </thead>
+            <tbody id="bt_trades"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- UNIVERSE TAB -->
+      <section id="tab-universe" class="tab-panel">
+        <div class="panel-header">
+          <h2>👁️ واچ‌لیست (یونیورس زنده)</h2>
+          <button class="btn btn-reset" onclick="resetSection('universe')" title="پاک کردن واچ‌لیست">🗑️ ریست</button>
+        </div>
+        <div id="universe_grid" class="signal-grid"></div>
+      </section>
+
+      <!-- ASSISTANT TAB -->
+      <section id="tab-assistant" class="tab-panel">
+        <div class="assistant-wrap">
+          <div class="assistant-head">
+            <h2>🤖 دستیار اسنایپر</h2>
+            <p>درباره پامپ، اتر، حد ضرر، واگرایی، بک‌تست و وضعیت حساب بپرسید.</p>
+          </div>
+          <div id="assistant_log" class="chat-log"></div>
+          <div class="chat-input">
+            <input id="assistant_input" class="input" placeholder="سؤالت رو به فارسی بپرس..." autocomplete="off">
+            <button id="assistant_send" class="btn">بفرست</button>
+          </div>
+          <div class="quick-q">
+            <button class="chip" data-q="پامپ چیست؟">پامپ چیست؟</button>
+            <button class="chip" data-q="اتر یعنی چی؟">اتر یعنی چی؟</button>
+            <button class="chip" data-q="وضعیت پوزیشن‌هام چطوره؟">وضعیت پوزیشن‌ها؟</button>
+            <button class="chip" data-q="چطور استفاده کنم؟">چطور استفاده کنم؟</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- SETTINGS TAB -->
+      <section id="tab-settings" class="tab-panel">
+        <div class="panel-header">
+          <h2>⚙️ تنظیمات</h2>
+          <button class="btn btn-reset" onclick="resetSection('settings')" title="برگشت تنظیمات به حالت پیش‌فرض">🗑️ ریست به پیش‌فرض</button>
+        </div>
+        <div class="settings-grid">
+          <!-- API Keys -->
+          <div class="settings-card">
+            <h3>🔑 کلیدهای API صرافی</h3>
+            <div class="form-group">
+              <label>Binance API Key</label>
+              <input type="password" id="set_binance_key" class="input" placeholder="_BINANCE_API_KEY_">
+            </div>
+            <div class="form-group">
+              <label>Binance API Secret</label>
+              <input type="password" id="set_binance_secret" class="input" placeholder="_BINANCE_API_SECRET_">
+            </div>
+            <div class="form-group">
+              <label>Bybit API Key</label>
+              <input type="password" id="set_bybit_key" class="input" placeholder="_BYBIT_API_KEY_">
+            </div>
+            <div class="form-group">
+              <label>Bybit API Secret</label>
+              <input type="password" id="set_bybit_secret" class="input" placeholder="_BYBIT_API_SECRET_">
+            </div>
+          </div>
+
+          <!-- Telegram -->
+          <div class="settings-card">
+            <h3>📱 تلگرام</h3>
+            <div class="form-group">
+              <label>
+                <input type="checkbox" id="set_tg_enabled"> فعال‌سازی اعلان تلگرام
+              </label>
+            </div>
+            <div class="form-group">
+              <label>توکن ربات</label>
+              <input type="password" id="set_tg_token" class="input" placeholder="123456:ABC-DEF...">
+            </div>
+            <div class="form-group">
+              <label>Chat ID</label>
+              <input type="text" id="set_tg_chat" class="input" placeholder="-100123456789">
+            </div>
+          </div>
+
+          <!-- Risk -->
+          <div class="settings-card">
+            <h3>⚠️ مدیریت ریسک</h3>
+            <div class="form-group">
+              <label>ریسک هر ترید (%)</label>
+              <input type="number" id="set_risk_pct" class="input" value="1.0" step="0.1" min="0.1" max="10">
+            </div>
+            <div class="form-group">
+              <label>موجودی اولیه (USDT)</label>
+              <input type="number" id="set_initial_balance" class="input" value="10000" step="100">
+            </div>
+            <div class="form-group">
+              <label>حداکثر پوزیشن باز</label>
+              <input type="number" id="set_max_positions" class="input" value="8" min="1" max="50">
+            </div>
+            <div class="form-group">
+              <label>حداکثر ضرر روزانه (%)</label>
+              <input type="number" id="set_daily_loss" class="input" value="5.0" step="0.5" min="1" max="20">
+            </div>
+            <div class="form-group">
+              <label>ضریب حد ضرر (ATR)</label>
+              <input type="number" id="set_sl_mult" class="input" value="1.5" step="0.1" min="0.5" max="5">
+            </div>
+            <div class="form-group">
+              <label>ضریب حد سود (ATR)</label>
+              <input type="number" id="set_tp_mult" class="input" value="3.0" step="0.1" min="1" max="10">
+            </div>
+            <div class="form-group">
+              <label>ضریب تریلینگ (ATR)</label>
+              <input type="number" id="set_trail_mult" class="input" value="2.0" step="0.1" min="1" max="5">
+            </div>
+          </div>
+
+          <!-- Strategies -->
+          <div class="settings-card">
+            <h3>📋 استراتژی‌ها</h3>
+            <div class="form-group">
+              <label>حداقل امتیاز سیگنال</label>
+              <input type="number" id="set_min_score" class="input" value="0.55" step="0.05" min="0.3" max="1">
+            </div>
+            <div class="form-group">
+              <label>
+                <input type="checkbox" id="set_st_new_listing" checked> 🆕 New Listing Sniper
+              </label>
+            </div>
+            <div class="form-group">
+              <label>
+                <input type="checkbox" id="set_st_volume" checked> 🔊 Volume Spike
+              </label>
+            </div>
+            <div class="form-group">
+              <label>
+                <input type="checkbox" id="set_st_orderbook" checked> ⚖️ Order Book Imbalance
+              </label>
+            </div>
+            <div class="form-group">
+              <label>
+                <input type="checkbox" id="set_st_liquidity" checked> 🌊 Liquidity Grab
+              </label>
+            </div>
+            <div class="form-group">
+              <label>
+                <input type="checkbox" id="set_st_momentum" checked> 🔥 Momentum Ignition
+              </label>
+            </div>
+            <div class="form-group">
+              <label>
+                <input type="checkbox" id="set_st_rsi" checked> 📊 RSI Divergence
+              </label>
+            </div>
+            <div class="form-group">
+              <label>
+                <input type="checkbox" id="set_st_bb" checked> 🎯 BB Breakout
+              </label>
+            </div>
+            <div class="form-group">
+              <label>
+                <input type="checkbox" id="set_st_funding"> 💸 Funding/OI Spike
+              </label>
+            </div>
+            <div class="form-group">
+              <label>
+                <input type="checkbox" id="set_st_social"> 📱 Social Momentum
+              </label>
+            </div>
+            <div class="form-group">
+              <label>
+                <input type="checkbox" id="set_st_ema" checked> 📈 EMA Cross
+              </label>
+            </div>
+            <div class="form-group">
+              <label>
+                <input type="checkbox" id="set_st_adx" checked> 📊 ADX Trend
+              </label>
+            </div>
+            <div class="form-group">
+              <label>
+                <input type="checkbox" id="set_st_squeeze" checked> 💎 Squeeze
+              </label>
+            </div>
+            <div class="form-group">
+              <label>
+                <input type="checkbox" id="set_st_vwap" checked> 📐 VWAP
+              </label>
+            </div>
+            <div class="form-group">
+              <label>
+                <input type="checkbox" id="set_st_macd" checked> 📊 MACD Crossover
+              </label>
+            </div>
+            <div class="form-group">
+              <label>
+                <input type="checkbox" id="set_st_stoch_rsi" checked> 📊 Stochastic RSI
+              </label>
+            </div>
+            <div class="form-group">
+              <label>
+                <input type="checkbox" id="set_st_obv" checked> 📊 OBV Divergence
+              </label>
+            </div>
+            <div class="form-group">
+              <label>
+                <input type="checkbox" id="set_st_sr" checked> 🎯 Support/Resistance
+              </label>
+            </div>
+            <div class="form-group">
+              <label>
+                <input type="checkbox" id="set_st_vol_trend" checked> 📊 Volume Trend
+              </label>
+            </div>
+          </div>
+
+          <!-- DEX -->
+          <div class="settings-card">
+            <h3>🔗 DEX</h3>
+            <div class="form-group">
+              <label>
+                <input type="checkbox" id="set_dex_enabled" checked> فعال‌سازی DEX
+              </label>
+            </div>
+            <div class="form-group">
+              <label>حداقل نقدینگی (USD)</label>
+              <input type="number" id="set_dex_min_liq" class="input" value="10000" step="1000">
+            </div>
+            <div class="form-group">
+              <label>حداکثر سن توکن (ساعت)</label>
+              <input type="number" id="set_dex_max_age" class="input" value="24" min="1" max="168">
+            </div>
+          </div>
+
+          <!-- LLM -->
+          <div class="settings-card">
+            <h3>🤖 دستیار LLM</h3>
+            <div class="form-group">
+              <label>
+                <input type="checkbox" id="set_llm_enabled"> فعال‌سازی LLM
+              </label>
+            </div>
+            <div class="form-group">
+              <label>مدل</label>
+              <input type="text" id="set_llm_model" class="input" value="gpt-4o-mini">
+            </div>
+            <div class="form-group">
+              <label>API Key</label>
+              <input type="password" id="set_llm_key" class="input" placeholder="sk-...">
+            </div>
+            <div class="form-group">
+              <label>Base URL</label>
+              <input type="text" id="set_llm_url" class="input" value="https://api.openai.com/v1">
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-actions">
+          <button id="settings_save" class="btn btn-primary" onclick="saveSettings()">💾 ذخیره تنظیمات</button>
+          <button id="settings_reload" class="btn" onclick="loadSettings()">🔄 بارگذاری مجدد</button>
+          <button id="settings_test_tg" class="btn btn-secondary" onclick="testTelegram()">📱 تست تلگرام</button>
+          <button id="settings_test_exchange" class="btn btn-secondary" onclick="testExchange()">🔗 تست صرافی</button>
+        </div>
+        <div id="settings_status" class="settings-status"></div>
+      </section>
+
+      <!-- HELP TAB -->
+      <section id="tab-help" class="tab-panel">
+        <h2>❓ راهنمای استفاده</h2>
+        <div class="help-grid">
+          <div class="help-card">
+            <h3>📡 سیگنال‌ها</h3>
+            <p>سیگنال‌های شکار میم‌کوین با ۱۳ استراتژی مختلف. هر سیگنال شامل:</p>
+            <ul>
+              <li><b>امتیاز:</b> ۰ تا ۱ — هرچه بالاتر، قوی‌تر</li>
+              <li><b>ورود/TP/SL:</b> قیمت پیشنهادی ورود، حد سود و حد ضرر</li>
+              <li><b>وضعیت:</b> 🟢 فعال | ✅ سود | ❌ ضرر | ⏰ بسته</li>
+              <li><b>تایم‌فریم‌ها:</b> وزن هر تایم‌فریم در امتیاز نهایی</li>
+            </ul>
+          </div>
+          <div class="help-card">
+            <h3>🎯 شکارچی میم‌کوین</h3>
+            <p>۴ استراتژی اختصاصی شکار میم‌کوین‌های پامپی:</p>
+            <ul>
+              <li><b>💥 شکار قبل از پامپ:</b> توکن‌های تازه (&lt;۳۰ دقیقه) با حجم رشد‌یافته و ورود Smart Money</li>
+              <li><b>🚀 بعد از Migration:</b> توکن‌های منتقل‌شده از Pump.fun به DEX با حجم بالا</li>
+              <li><b>🐋 Smart Money:</b> توکن‌هایی که کیف پول‌های هوشمند روی آن‌ها وارد شده‌اند</li>
+              <li><b>📖 روایت‌ها:</b> میم‌کوین‌های همسو با ترندهای روز (AI، Trump، Grok، PEPE...)</li>
+            </ul>
+          </div>
+          <div class="help-card">
+            <h3>📂 پوزیشن‌ها</h3>
+            <p>تریدهای کاغذی (Paper Trading) با جزئیات کامل:</p>
+            <ul>
+              <li><b>نوع:</b> اسپات / فیوچرز / DEX</li>
+              <li><b>اهرم:</b> ضریب اهرم (1x = اسپات)</li>
+              <li><b>زمان ورود/خروج:</b> لحظه دقیق</li>
+              <li><b>مدت نگهداری:</b> مدت زمان باز بودن پوزیشن</li>
+              <li><b>PnL:</b> سود/ضرر به USDT و درصد</li>
+            </ul>
+          </div>
+          <div class="help-card">
+            <h3>📈 نمودار</h3>
+            <p>نمودار کندل‌استیک حرفه‌ای (TradingView):</p>
+            <ul>
+              <li><b>کندل‌استیک:</b> OHLC با حجم</li>
+              <li><b>زنده:</b> دکمه 🔴 زنده برای آپدیت خودکار هر ۵ ثانیه</li>
+              <li><b>تایم‌فریم:</b> ۱ دقیقه تا ۱ ساعت</li>
+            </ul>
+          </div>
+          <div class="help-card">
+            <h3>🧪 بک‌تست</h3>
+            <p>تست استراتژی روی داده‌های تاریخی با مت‌ریک‌های پیشرفته:</p>
+            <ul>
+              <li><b>Sharpe/Sortino/Calmar:</b> نسبت ریسک به بازده</li>
+              <li><b>Win Rate:</b> درصد تریدهای سودده</li>
+              <li><b>Max Drawdown:</b> بیشترین افت سرمایه</li>
+              <li><b>Monte Carlo:</b> بازه اطمینان ۹۵٪</li>
+              <li><b>_expectation:</b> انتظار ریاضی هر ترید</li>
+            </ul>
+          </div>
+          <div class="help-card">
+            <h3>⚙️ تنظیمات ریسک</h3>
+            <p>تنظیمات پیش‌فرض در <code>config/config.yaml</code>:</p>
+            <ul>
+              <li><b>ریسک هر ترید:</b> ۱٪ موجودی</li>
+              <li><b>حداکثر ضرر روزانه:</b> ۵٪</li>
+              <li><b>حداکثر پوزیشن باز:</b> ۸</li>
+              <li><b>SL:</b> ۱.۵ برابر ATR</li>
+              <li><b>TP:</b> ۳ برابر ATR</li>
+            </ul>
+          </div>
+          <div class="help-card">
+            <h3>🔗 DEX</h3>
+            <p>شکار میم‌کوین‌های تازه‌launch شده روی DEXها:</p>
+            <ul>
+              <li><b>Pump.fun:</b> گراند-صفر میم‌کوین‌ها</li>
+              <li><b>Raydium:</b> بزرگترین DEX سولانا</li>
+              <li><b>PancakeSwap:</b> DEX زنجیره BNB</li>
+              <li><b>Uniswap:</b> DEX اصلی اتریوم</li>
+            </ul>
+          </div>
+        </div>
+        <div class="tip-of-day" id="tip_of_day"></div>
+      </section>
+    </main>
+
+    <!-- TOAST -->
+    <div id="toast" class="toast hidden"></div>
+  </div>
+
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>

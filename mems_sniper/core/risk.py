@@ -88,7 +88,6 @@ class RiskEngine:
     # ---------------------------------------------------- open
     def can_open(self) -> bool:
         self._rollover_day_if_needed()
-        # ── محدودیت max_open برداشته شد — پوزیشن‌های نامحدود ──
         pnl_pct = (self.equity - self.start_of_day_equity) / max(self.start_of_day_equity, 1e-9) * 100.0
         if pnl_pct <= -self.daily_loss_limit_pct:
             logger.warning(
