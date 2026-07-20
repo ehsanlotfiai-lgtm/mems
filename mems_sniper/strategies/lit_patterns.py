@@ -234,11 +234,11 @@ class SetupDetector:
         cfg = config or {}
         self.fvg_detector = FVGDetector(min_gap_pct=float(cfg.get("min_fvg_pct", 0.03)))
         self.ob_detector = OBDetector(min_displacement_ratio=float(cfg.get("min_ob_displacement", 1.5)))
-        self.require_fvg = bool(cfg.get("require_fvg", False))  # Don't require FVG (allow OB-only)
+        self.require_fvg = bool(cfg.get("require_fvg", True))
         self.require_ob_confluence = bool(cfg.get("require_ob_confluence", False))
         self.conservative_requires_bos = bool(cfg.get("conservative_requires_bos", False))
         self.max_age_bars = int(cfg.get("max_age_bars_after_sweep", 20))
-        self.signal_mode = cfg.get("signal_mode", "aggressive")
+        self.signal_mode = cfg.get("signal_mode", "strict")
 
     def detect(
         self,
@@ -342,10 +342,9 @@ class SetupDetector:
 
             # Check FVG
             fvg = self.fvg_detector.get_unmitigated_fvg(fvgs, needed_fvg, price)
-            if self.require_fvg and fvg is None:
+            if fvg is None:
                 continue
-            if fvg:
-                reasons.append(f"FVG zone: {fvg.bottom:.6g} — {fvg.top:.6g}")
+            reasons.append(f"FVG zone: {fvg.bottom:.6g} — {fvg.top:.6g}")
 
             # Check OB confluence (optional)
             ob_match = None
@@ -435,10 +434,9 @@ class SetupDetector:
 
             # FVG for entry
             fvg = self.fvg_detector.get_unmitigated_fvg(fvgs, needed_fvg, price)
-            if self.require_fvg and fvg is None:
+            if fvg is None:
                 continue
-            if fvg:
-                reasons.append(f"Entry FVG: {fvg.bottom:.6g} — {fvg.top:.6g}")
+            reasons.append(f"Entry FVG: {fvg.bottom:.6g} — {fvg.top:.6g}")
 
             # Target: external liquidity in trend direction
             if side == "long":
@@ -514,8 +512,9 @@ class SetupDetector:
         # FVG
         needed_fvg = "bullish" if side == "long" else "bearish"
         fvg = self.fvg_detector.get_unmitigated_fvg(fvgs, needed_fvg, price)
-        if fvg:
-            reasons.append(f"FVG for entry: {fvg.bottom:.6g} — {fvg.top:.6g}")
+        if fvg is None:
+            return None
+        reasons.append(f"FVG for entry: {fvg.bottom:.6g} — {fvg.top:.6g}")
 
         # Target: opposite side of range or external liquidity
         if side == "long":

@@ -120,7 +120,7 @@ class LITEngine:
         self.annotation_builder = AnnotationBuilder()
 
         # Config
-        self.min_score = float(cfg.get("min_score", 0.50))
+        self.min_score = float(cfg.get("min_score", 0.72))
         self.annotation_enabled = bool(cfg.get("annotation_enabled", True))
 
         logger.info(f"LIT Engine v3 ready — min_score={self.min_score}, min_RR={self.execution_engine.min_rr}")
@@ -189,12 +189,6 @@ class LITEngine:
             htf_bias, entry_structure, liq_map, atr, current_price, timestamps,
         )
 
-        # Fallback: if no strict setup found, try simpler displacement+FVG setup
-        if candidate is None:
-            candidate = self._fallback_displacement_setup(
-                opens, highs, lows, closes, htf_bias, entry_structure, liq_map, atr, current_price, timestamps
-            )
-
         if candidate is None:
             return None
 
@@ -232,6 +226,10 @@ class LITEngine:
         # No-trade filters
         if not self.execution_engine.passes_filters(candidate, plan, score):
             logger.debug(f"LIT {symbol}: failed filters — score={score.total:.2f}")
+            return None
+
+        if score.total < self.min_score:
+            logger.debug(f"LIT {symbol}: below engine min score — score={score.total:.2f}")
             return None
 
         # ═══ LAYER 5: BUILD SIGNAL ═══

@@ -76,11 +76,11 @@ class ExecutionEngine:
 
     def __init__(self, config: dict = None):
         cfg = config or {}
-        self.min_rr = float(cfg.get("min_rr", 2.0))
+        self.min_rr = float(cfg.get("min_rr", 2.5))
         self.atr_stop_buffer_mult = float(cfg.get("atr_stop_buffer_mult", 0.2))
         self.risk_pct = float(cfg.get("risk_per_trade_pct", 1.0))
         self.balance = float(cfg.get("initial_balance", 10000))
-        self.min_score = float(cfg.get("min_score", 0.50))
+        self.min_score = float(cfg.get("min_score", 0.72))
 
     def compute(
         self,
@@ -337,6 +337,16 @@ class ExecutionEngine:
         # setup with every other box checked could still slip through with
         # a mediocre-but-passing score despite forming in pure noise.
         if score.choppy_penalty >= 0.15:
+            return False
+        if score.session_quality < 0.70:
+            return False
+        if score.fvg_ob_confluence < 0.55:
+            return False
+        if score.sweep_quality < 0.65:
+            return False
+        if score.displacement_strength < 0.70:
+            return False
+        if score.liquidity_quality < 0.65:
             return False
         return True
 
