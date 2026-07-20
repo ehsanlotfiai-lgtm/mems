@@ -1278,7 +1278,6 @@ def create_app(
                 htf_df = _to_lit_df(htf_data) if htf_data else None
 
                 trades = []
-                min_score = float(_lit_lit_cfg.get("min_score", 0.70))
                 cooldown_candles = 30
                 window = 80
 
